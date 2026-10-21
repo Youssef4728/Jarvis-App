@@ -20,7 +20,24 @@ permissions:
 jobs:
   claude:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: anthropics/claude-code-action@v1
+      # Zuerst das Repository auschecken
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Prüfen, ob Git korrekt verfügbar ist
+      - name: Verify Git repository
+        run: |
+          git rev-parse --show-toplevel
+          git status --short --branch
+          git branch --show-current
+
+      # Erst danach Claude starten
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+
