@@ -1,43 +1,65 @@
 
-name: Claude Code Agent
+name: JARVIS Claude Agent
 
 on:
+  issues:
+    types: [opened, edited, assigned, labeled]
   issue_comment:
     types: [created]
   pull_request_review_comment:
     types: [created]
-  issues:
-    types: [opened, assigned, labeled]
   pull_request_review:
     types: [submitted]
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: Instructions for Claude to run manually
+        required: true
+        type: string
 
 permissions:
   contents: write
   pull-requests: write
   issues: write
   id-token: write
+  actions: read
 
 jobs:
   claude:
+    name: Claude Code Agent
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'issues' &&
+        (
+          contains(github.event.issue.body, '@claude') ||
+          contains(github.event.issue.title, '@claude')
+        )
+      ) ||
+      (
+        github.event_name == 'issue_comment' &&
+        contains(github.event.comment.body, '@claude')
+      ) ||
+      (
+        github.event_name == 'pull_request_review_comment' &&
+        contains(github.event.comment.body, '@claude')
+      ) ||
+      (
+        github.event_name == 'pull_request_review' &&
+        contains(github.event.review.body, '@claude')
+      )
+
     runs-on: ubuntu-latest
 
     steps:
-      # Zuerst das Repository auschecken
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      # Prüfen, ob Git korrekt verfügbar ist
-      - name: Verify Git repository
-        run: |
-          git rev-parse --show-toplevel
-          git status --short --branch
-          git branch --show-current
-
-      # Erst danach Claude starten
       - name: Run Claude Code
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-
+          prompt: ${{ inputs.prompt }}
+          trigger_phrase: "@claude"

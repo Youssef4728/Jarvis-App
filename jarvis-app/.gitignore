@@ -1,0 +1,15 @@
+.env.local
+node_modules
+.next
+
+# JARVIS: lokale und generierte Dateien
+.env
+.env.*
+!.env.example
+node_modules/
+.next/
+*.tsbuildinfo
+coverage/
+dist/
+build/
+out/
