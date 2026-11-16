@@ -10,9 +10,10 @@ Backlog, Ready, In Progress, Testing, Review, Blocked, Awaiting Approval, Comple
 
 - Current production commit: 4dee1be (Dashboard 2.0; Vercel reported deployment success).
 - Current development branch: feature/self-evolution-foundation.
-- Current task: SE-005 Development Center UI on the authenticated Development API.
+- Latest implementation commit: `20c524b` (`feat: add JARVIS development center foundation`) on `feature/self-evolution-foundation`.
+- Current task: SE-002 local schema validation; SE-004's unit-test acceptance criteria are complete.
 - Database migrations: pending; none applied by this development work.
-- Verification on this branch: 74 tests passed, TypeScript check passed, and the Next.js production build passed.
+- Verification on this branch: 75 tests passed; TypeScript check passed; the Next.js production build passed.
 - Local database validation: blocked because the Supabase Postgres container failed during initialization with a Realtime connection-pool timeout; the CLI stopped its local containers before applying this migration.
 - External blocker from release verification: Vercel account connection is not available in this session, so Production variables and public domain were not inspected.
 
@@ -23,8 +24,8 @@ Backlog, Ready, In Progress, Testing, Review, Blocked, Awaiting Approval, Comple
 | SE-001 | P0 | Completed | — | Persist the Master Vision, architecture, agents, self-evolution, roadmap, security, and operations docs. All describe current reality and target boundaries. |
 | SE-002 | P0 | Blocked | SE-001 | Additive Supabase schema is drafted with constraints, indexes, service-role-only RPC writes, and append-only events. Validate it against a local database and add rollback notes. Blocker: local Supabase Postgres initialization times out before migrations run. No production migration was applied. |
 | SE-003 | P0 | Testing | SE-002 schema contract | Implemented typed validation, authenticated snapshot/create/transition API, idempotent RPC contracts, and dependency/status rules. Live database validation remains blocked. |
-| SE-004 | P0 | In Progress | SE-003 | Unit tests cover vision and task validation, dependency cycles, status transitions, API authorization, and safe RPC conflicts. Add tests for create-item RPC payloads and audit/event behavior. |
-| SE-005 | P1 | In Progress | SE-003 | Development Center UI now reads snapshots, creates versioned visions and structured goals/tasks, advances safe statuses, and shows loading/error/empty/events. Verify it against local Supabase once the local database starts. |
+| SE-004 | P0 | Completed | SE-003 | Unit tests cover vision and task validation, dependency cycles, status transitions, API authorization, safe RPC conflicts, and the structured create-item RPC payload. Event persistence still depends on SE-002 local-schema validation. |
+| SE-005 | P1 | Testing | SE-003 | Development Center UI now reads snapshots, creates versioned visions and structured goals/tasks, advances safe statuses, and shows loading/error/empty/events. Verify it against local Supabase once the local database starts. |
 | SE-006 | P1 | Backlog | SE-002, SE-003 | Add an import/bootstrap path for the checked-in initial backlog and vision that is idempotent and never overwrites newer user edits. |
 | SE-007 | P1 | Backlog | SE-004 | Review the migration against current schemas and document safe local validation, backup, rollback, and manual production approval steps. |
 | SE-008 | P1 | Backlog | SE-003 | Record provider calls, exact commit references, test evidence, reviewer results, and cost/usage estimates on development tasks. |
