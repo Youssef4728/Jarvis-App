@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import Link from "next/link";
+import DevelopmentCenter from "@/components/development-center";
 
 type Task = { id: string; text: string; due: string | null; done: boolean; priority: "high" | "normal" | "low" };
 type ScheduleItem = { id?: string; title: string; time: string | null; category: string };
@@ -41,6 +42,7 @@ const navigation = [
   { id: "fitness", href: "/#fitness", label: "Fitness", icon: "activity" },
   { id: "habits", href: "/#habits", label: "Habits", icon: "spark" },
   { id: "assistant", href: "/#assistant", label: "AI Assistant", icon: "message" },
+  { id: "development", href: "/#development", label: "Development", icon: "settings" },
   { id: "settings", href: "/#settings", label: "Settings", icon: "settings" },
 ] as const;
 const primaryMobileNavigation = navigation.filter((item) => ["dashboard", "my-day", "tasks", "assistant"].includes(item.id));
@@ -540,6 +542,8 @@ export default function JarvisDashboard() {
             {jobDetails && selectedJob === jobDetails.job.id && <article className="job-detail"><h3>{jobStatusLabel[jobDetails.job.status] ?? jobDetails.job.status}</h3><p>{jobDetails.job.plan?.summary ?? jobDetails.job.request_text}</p>{jobDetails.job.plan?.steps.map((step, index) => <p className="job-step" key={index}><strong>{index + 1}. {step.title}</strong><br />{step.description}</p>)}{jobDetails.job.review && <p className="review-copy"><strong>Claude-Prüfung:</strong> {jobDetails.job.review.summary}</p>}{jobDetails.job.review?.concerns.map((concern, index) => <p className="job-concern" key={index}>Hinweis: {concern}</p>)}{jobDetails.steps.map((step) => <p className="job-step" key={step.id}>{step.agent} · {step.name}: {step.summary ?? (step.error_code ? automationErrorMessage(step.error_code) : step.status)}</p>)}{jobDetails.job.evaluation && <p><strong>Ergebnis:</strong> {jobDetails.job.evaluation.summary}</p>}{jobDetails.job.evaluation?.limitations.map((item, index) => <p className="job-concern" key={index}>Einschränkung: {item}</p>)}{jobDetails.job.github_pr_url && <p><a className="subtle-link" href={jobDetails.job.github_pr_url} target="_blank" rel="noreferrer">Pull Request prüfen <Icon name="arrow" size={14} /></a></p>}{jobDetails.job.github_task_url && <p><a className="subtle-link" href={jobDetails.job.github_task_url} target="_blank" rel="noreferrer">GitHub-Aufgabe öffnen <Icon name="arrow" size={14} /></a></p>}{jobDetails.job.github_state && <p className="job-step">GitHub-Status: {jobDetails.job.github_state}</p>}{jobDetails.job.failure_code && <p role="alert" className="inline-error">{automationErrorMessage(jobDetails.job.failure_code)}</p>}{jobDetails.job.status === "failed" && !jobDetails.job.github_task_id && jobDetails.job.planning_attempt_count < 2 && /^(openai|claude)_|^provider_request_failed$/.test(jobDetails.job.failure_code ?? "") && <button className="secondary-button" disabled={jobActionBusy} onClick={() => void retryJob(jobDetails.job.id)}>{jobActionBusy ? "Wird wiederholt…" : "Planung erneut versuchen"}</button>}{jobDetails.job.status === "awaiting_approval" && <div className="approval-panel"><h4>Vorgeschlagener GitHub-Auftrag</h4><pre>{jobDetails.job.review?.prompt ?? jobDetails.job.plan?.prompt}</pre><p>Die Freigabe startet einen Agenten auf einem neuen Branch und fordert einen Pull Request an. Kein automatischer Merge oder Deploy.</p><button className="primary-button" type="button" disabled={jobActionBusy} onClick={() => { if (window.confirm("Diesen angezeigten Plan an den GitHub-Agenten übergeben? Es wird ein Branch/PR angefordert; kein automatischer Merge oder Deploy.")) void approveJob(jobDetails.job.id); }}>{jobActionBusy ? "Wird freigegeben…" : "Plan freigeben und Agent starten"}</button></div>}</article>}
           </div>
         </Card>
+
+        <DevelopmentCenter password={pw} />
 
         <Card id="settings" className="content-card settings-card"><div><SectionTitle eyebrow="PREFERENCES" title="Settings" detail="Dashboard und Sitzung verwalten" /><p>Dein ausgewähltes Design wird auf diesem Gerät gespeichert.</p></div><div className="settings-actions"><button className="theme-toggle" type="button" onClick={() => setTheme((value) => value === "dark" ? "light" : "dark")}><Icon name={theme === "dark" ? "sunMode" : "moon"} />{theme === "dark" ? "Light mode" : "Dark mode"}</button><button className="secondary-button" type="button" onClick={signOut}><Icon name="logout" size={16} />Abmelden</button></div></Card>
         <footer className="page-footer"><span><i className="status-dot" />JARVIS SYSTEM ONLINE</span><span>PERSONAL AI COMMAND CENTER · {formatDate(today, { year: "numeric" })}</span></footer>

@@ -1,5 +1,15 @@
 # Jarvis – Gerüst
 
+## Architecture and development
+- [Master Vision](docs/MASTER_VISION.md)
+- [System Architecture](docs/SYSTEM_ARCHITECTURE.md)
+- [Agent System](docs/AGENT_SYSTEM.md)
+- [Self-Evolution Engine](docs/SELF_EVOLUTION_ENGINE.md)
+- [Development Roadmap](docs/DEVELOPMENT_ROADMAP.md)
+- [Security and Approval](docs/SECURITY_AND_APPROVAL.md)
+- [Operations](docs/OPERATIONS.md)
+- [Persistent Development Backlog](docs/DEVELOPMENT_BACKLOG.md)
+
 1. In Supabase: erst `supabase/schema.sql`, dann `supabase/seed.sql` im SQL Editor ausführen.
 2. `.env.example` nach `.env.local` kopieren und ausfüllen. `APP_PASSWORD` ist das Passwort für die Weboberfläche; bei einem 401 fragt die Oberfläche erneut danach.
 3. `npm install && npm run dev`
