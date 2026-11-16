@@ -131,7 +131,11 @@ export function createAutomationController(
     let jobId: string;
     try {
       jobId = validateJobId(jobIdValue);
-      if (!process.env.GITHUB_USER_TOKEN) throw new Error("github_not_configured");
+    } catch {
+      throw new AutomationError("job_id_invalid", 400);
+    }
+    if (!process.env.GITHUB_USER_TOKEN) throw new AutomationError("github_not_configured", 503);
+    try {
       getGithubRepository();
     } catch (error) {
       throw new AutomationError(error instanceof Error ? error.message : "github_not_configured", 503);

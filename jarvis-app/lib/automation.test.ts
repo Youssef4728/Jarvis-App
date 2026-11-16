@@ -248,6 +248,23 @@ test("automation authorization requires a configured password and an exact match
   }
 });
 
+test("approval returns a client error for malformed job IDs before checking GitHub configuration", async () => {
+  const previous = process.env.GITHUB_USER_TOKEN;
+  delete process.env.GITHUB_USER_TOKEN;
+  try {
+    const controller = createAutomationController(new MemoryAutomationStore(), makeProviders());
+    await assert.rejects(controller.approveJob("not-a-uuid"), (error: unknown) => {
+      assert.ok(error instanceof AutomationError);
+      assert.equal(error.code, "job_id_invalid");
+      assert.equal(error.httpStatus, 400);
+      return true;
+    });
+  } finally {
+    if (previous === undefined) delete process.env.GITHUB_USER_TOKEN;
+    else process.env.GITHUB_USER_TOKEN = previous;
+  }
+});
+
 test("read-only GitHub status requests retry once for transient failures only", async () => {
   let calls = 0;
   const result = await retryReadOnly(async () => {
