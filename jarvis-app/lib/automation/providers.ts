@@ -131,7 +131,7 @@ function githubHeaders(token: string): HeadersInit {
 }
 
 function githubToken(): string {
-  const token = process.env.GITHUB_USER_TOKEN;
+  const token = process.env.JARVIS_GITHUB_TOKEN;
   if (!token) throw new Error("github_not_configured");
   return token;
 }

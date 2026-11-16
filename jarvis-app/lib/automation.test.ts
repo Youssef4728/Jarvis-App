@@ -106,15 +106,15 @@ function makeProviders(overrides: Partial<AutomationProviders> = {}): Automation
 }
 
 async function withGithubConfig<T>(callback: () => Promise<T>) {
-  const oldToken = process.env.GITHUB_USER_TOKEN;
+  const oldToken = process.env.JARVIS_GITHUB_TOKEN;
   const oldRepository = process.env.GITHUB_REPOSITORY;
-  process.env.GITHUB_USER_TOKEN = "test-token";
+  process.env.JARVIS_GITHUB_TOKEN = "test-token";
   process.env.GITHUB_REPOSITORY = "example/repo";
   try {
     return await callback();
   } finally {
-    if (oldToken === undefined) delete process.env.GITHUB_USER_TOKEN;
-    else process.env.GITHUB_USER_TOKEN = oldToken;
+    if (oldToken === undefined) delete process.env.JARVIS_GITHUB_TOKEN;
+    else process.env.JARVIS_GITHUB_TOKEN = oldToken;
     if (oldRepository === undefined) delete process.env.GITHUB_REPOSITORY;
     else process.env.GITHUB_REPOSITORY = oldRepository;
   }
@@ -249,8 +249,8 @@ test("automation authorization requires a configured password and an exact match
 });
 
 test("approval returns a client error for malformed job IDs before checking GitHub configuration", async () => {
-  const previous = process.env.GITHUB_USER_TOKEN;
-  delete process.env.GITHUB_USER_TOKEN;
+  const previous = process.env.JARVIS_GITHUB_TOKEN;
+  delete process.env.JARVIS_GITHUB_TOKEN;
   try {
     const controller = createAutomationController(new MemoryAutomationStore(), makeProviders());
     await assert.rejects(controller.approveJob("not-a-uuid"), (error: unknown) => {
@@ -260,8 +260,8 @@ test("approval returns a client error for malformed job IDs before checking GitH
       return true;
     });
   } finally {
-    if (previous === undefined) delete process.env.GITHUB_USER_TOKEN;
-    else process.env.GITHUB_USER_TOKEN = previous;
+    if (previous === undefined) delete process.env.JARVIS_GITHUB_TOKEN;
+    else process.env.JARVIS_GITHUB_TOKEN = previous;
   }
 });
 

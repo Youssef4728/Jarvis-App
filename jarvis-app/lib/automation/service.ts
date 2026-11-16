@@ -134,7 +134,7 @@ export function createAutomationController(
     } catch {
       throw new AutomationError("job_id_invalid", 400);
     }
-    if (!process.env.GITHUB_USER_TOKEN) throw new AutomationError("github_not_configured", 503);
+    if (!process.env.JARVIS_GITHUB_TOKEN) throw new AutomationError("github_not_configured", 503);
     try {
       getGithubRepository();
     } catch (error) {

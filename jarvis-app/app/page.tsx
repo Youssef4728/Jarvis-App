@@ -36,7 +36,7 @@ function jobErrorMessage(code: string | null) {
   if (!code) return null;
   if (code === "openai_not_configured") return "OPENAI_API_KEY fehlt serverseitig.";
   if (code === "claude_not_configured") return "ANTHROPIC_API_KEY fehlt serverseitig.";
-  if (code === "github_not_configured") return "GITHUB_USER_TOKEN oder GitHub-Repository-Konfiguration fehlt.";
+  if (code === "github_not_configured") return "JARVIS_GITHUB_TOKEN oder GitHub-Repository-Konfiguration fehlt.";
   if (code === "github_dispatch_uncertain") return "Der Startstatus ist unbekannt. Vor einem erneuten Versuch zuerst die GitHub-Agent-Aufgaben prüfen, um Doppelstarts zu vermeiden.";
   if (code === "job_not_retryable") return "Dieser Auftrag kann nicht automatisch erneut geplant werden.";
   if (code === "request_may_contain_secret") return "Der Auftrag sieht wie ein Geheimnis oder Zugangsschlüssel aus und wurde nicht gespeichert. Entferne sensible Angaben.";
