@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isAutomationAuthorized } from "./automation/auth";
+import { githubErrorCode } from "./automation/providers";
 import { createAutomationController, AutomationError } from "./automation/service";
 import { retryReadOnly } from "./automation/retry";
 import type {
@@ -246,6 +247,26 @@ test("automation authorization requires a configured password and an exact match
     if (previous === undefined) delete process.env.APP_PASSWORD;
     else process.env.APP_PASSWORD = previous;
   }
+});
+
+test("automation authorization safely accepts UTF-8 encoded passwords", () => {
+  const previous = process.env.APP_PASSWORD;
+  const password = "jarvis-überprüfung";
+  process.env.APP_PASSWORD = password;
+  try {
+    const encoded = `utf8:${encodeURIComponent(password)}`;
+    assert.equal(isAutomationAuthorized(new Request("https://jarvis.test", { headers: { "x-app-password": encoded } })), true);
+    assert.equal(isAutomationAuthorized(new Request("https://jarvis.test", { headers: { "x-app-password": "utf8:%E0%A4%A" } })), false);
+  } finally {
+    if (previous === undefined) delete process.env.APP_PASSWORD;
+    else process.env.APP_PASSWORD = previous;
+  }
+});
+
+test("GitHub premium quota exhaustion is identified from its precondition response", () => {
+  assert.equal(githubErrorCode(412, "insufficient premium quota to create assignment"), "github_premium_quota_exhausted");
+  assert.equal(githubErrorCode(412, "another precondition failed"), "github_http_412");
+  assert.equal(githubErrorCode(429), "github_rate_limited");
 });
 
 test("approval returns a client error for malformed job IDs before checking GitHub configuration", async () => {

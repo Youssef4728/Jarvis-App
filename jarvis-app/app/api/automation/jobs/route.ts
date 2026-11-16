@@ -9,8 +9,10 @@ export async function GET(request: Request) {
   if (!isAutomationAuthorized(request)) return new Response("Nein", { status: 401 });
   try {
     return Response.json({ jobs: await createAutomationController().listJobs() });
-  } catch {
-    return Response.json({ error: "Aufträge konnten nicht geladen werden." }, { status: 503 });
+  } catch (error) {
+    const code = error instanceof Error && error.message === "automation_store_unavailable" ? error.message : "automation_store_unavailable";
+    console.error("[automation] GET /api/automation/jobs failed", { code });
+    return Response.json({ error: code }, { status: 503 });
   }
 }
 

@@ -48,7 +48,12 @@ export const supabaseAutomationStore: AutomationStore = {
       .select("*")
       .order("created_at", { ascending: false })
       .limit(limit);
-    if (error || !data) fail("automation_store_unavailable");
+    if (error) {
+      const message = error.message.replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]").replace(/(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+/g, "[REDACTED]");
+      console.error("[automation] listJobs Supabase query failed", { code: error.code, message });
+      fail("automation_store_unavailable");
+    }
+    if (!data) fail("automation_store_unavailable");
     return data as AutomationJob[];
   },
   async updateJob(jobId, expected, patch) {

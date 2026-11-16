@@ -136,6 +136,14 @@ function githubToken(): string {
   return token;
 }
 
+export function githubErrorCode(status: number, message = ""): string {
+  if (status === 412 && /insufficient premium quota to create assignment/i.test(message)) {
+    return "github_premium_quota_exhausted";
+  }
+  if (status === 429) return "github_rate_limited";
+  return `github_http_${status}`;
+}
+
 function parseGithubTask(data: unknown): GithubTask {
   if (!data || typeof data !== "object") throw new Error("github_response_invalid");
   const result = data as { id?: unknown; state?: unknown; html_url?: unknown; artifacts?: unknown };
@@ -181,7 +189,16 @@ async function githubRequest(path: string, init?: RequestInit): Promise<unknown>
     } catch {
       throw new Error(init?.method === "POST" ? "github_dispatch_network_error" : "fetch_failed");
     }
-    if (!response.ok) throw new Error(`github_http_${response.status}`);
+    if (!response.ok) {
+      let message = "";
+      try {
+        const body = await response.clone().json() as { message?: unknown };
+        if (typeof body.message === "string") message = body.message;
+      } catch {
+        // Keep the status-based error when GitHub returns a non-JSON body.
+      }
+      throw new Error(githubErrorCode(response.status, message));
+    }
     return response.json();
   };
   return init?.method === "POST" ? execute() : retryReadOnly(execute);

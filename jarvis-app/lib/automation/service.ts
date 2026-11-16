@@ -25,7 +25,7 @@ function safeFailureCode(error: unknown): string {
 }
 
 function isDefinitiveGithubRejection(error: unknown): boolean {
-  return error instanceof Error && /^github_http_(400|401|403|404|422)$/.test(error.message);
+  return error instanceof Error && (/^github_http_(400|401|403|404|412|422)$/.test(error.message) || error.message === "github_premium_quota_exhausted" || error.message === "github_rate_limited");
 }
 
 function statusFromGithub(task: GithubTask): "queued" | "in_progress" | "failed" | "completed" {
@@ -167,7 +167,8 @@ export function createAutomationController(
         failure_code: uncertain ? "github_dispatch_uncertain" : failureCode,
       });
       await store.addEvent(jobId, uncertain ? "github_dispatch_uncertain" : "github_dispatch_failed");
-      throw new AutomationError(uncertain ? "github_dispatch_uncertain" : failureCode, uncertain ? 502 : 422);
+      const httpStatus = uncertain ? 502 : failureCode === "github_premium_quota_exhausted" ? 429 : failureCode === "github_rate_limited" ? 429 : 422;
+      throw new AutomationError(uncertain ? "github_dispatch_uncertain" : failureCode, httpStatus);
     }
     const state = statusFromGithub(task);
     let updated: AutomationJob | null;
