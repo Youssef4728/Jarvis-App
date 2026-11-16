@@ -7,6 +7,13 @@
 5. Die Abend-Erinnerung läuft täglich um 19:00 UTC (21:00 Sommerzeit, 20:00 Winterzeit in Deutschland). Zeit in `vercel.json` anpassen.
 6. Termine änderst du im Chat mit Claude oder direkt in Supabase (Tabellen `routines`, `events`, `breaks`). Gebetszeiten holt die App täglich automatisch (Ort in `lib/prayer.ts`).
 
+## Supabase CLI im Codespace
+- Die CLI ist als Dev-Abhängigkeit installiert; im Projektordner mit `npx supabase --version` prüfen.
+- Der Codespace kann `~/.supabase` schreibgeschützt bereitstellen. CLI-Befehle dann mit `SUPABASE_HOME=/tmp/jarvis-supabase-home` starten.
+- Für Login und Remote-Migrationen `SUPABASE_ACCESS_TOKEN` und `SUPABASE_DB_PASSWORD` als Codespaces-Secrets setzen. Die Kombination aus beiden CLI-Variablen gehört nicht in den Browser oder in Git.
+- Das verbundene Projekt wird mit `npx supabase link --project-ref <project-ref>` verknüpft. Der Projekt-Ref ist der Hostname-Präfix von `SUPABASE_URL` (ohne `.supabase.co`).
+- Die zwei noch ausstehenden Änderungen liegen als Timestamp-Migrationen unter `supabase/migrations/`; alternativ enthält `supabase/apply_pending_migrations.sql` beide geordnet samt Abschlussprüfung für den SQL Editor.
+
 ## Agent-Version (v2)
 - Zusätzlich `supabase/schema_v2.sql` ausführen (Tasks, Geld, Fitness, Gewohnheiten, Fakten).
 - Aufgaben verwenden die Spalten `text`, `due`, `done` und `priority`; neue Aufgaben werden offen angelegt. Eine separate Beschreibungsspalte ist im aktuellen Schema nicht vorhanden. Priorität ist `high`, `normal` oder `low`; bestehende Aufgaben erhalten beim Anwenden der Migration den Standard `normal`.
