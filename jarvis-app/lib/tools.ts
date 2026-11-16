@@ -78,10 +78,15 @@ export async function runTool(name: string, i: any, supabaseClient?: SupabaseCli
     case "get_plan": {
       const from = getLocalDate();
       const to = addCalendarDays(from, 14);
-      const { data } = await supabase.from("events").select("title,day,time,skipped").gte("day", from).lte("day", to).order("day");
+      const { data, error } = await supabase.from("events").select("title,day,time,skipped").gte("day", from).lte("day", to).order("day");
+      if (error) throw new Error(`Termine konnten nicht geladen werden: ${error.message}`);
       return JSON.stringify({ morgen: await loadTomorrow(), naechste_termine: data });
     }
-    case "add_event": await supabase.from("events").insert({ title: i.title, day: i.day, time: i.time || null, category: i.category || "termin" }); return "eingetragen";
+    case "add_event": {
+      const { error } = await supabase.from("events").insert({ title: i.title, day: i.day, time: i.time || null, category: i.category || "termin" });
+      if (error) throw new Error(`Termin konnte nicht gespeichert werden: ${error.message}`);
+      return "eingetragen";
+    }
     case "add_task": {
       const priority: TaskPriority = i.priority ?? "normal";
       const { data, error } = await supabase
@@ -137,15 +142,37 @@ export async function runTool(name: string, i: any, supabaseClient?: SupabaseCli
       if (updated.id !== taskId || !updated.done) throw new Error("Supabase hat das Abhaken der Aufgabe nicht bestätigt.");
       return "erledigt";
     }
-    case "log_money": await supabase.from("money").insert({ amt: i.amount, note: i.note || null }); return "gebucht";
+    case "log_money": {
+      if (typeof i.amount !== "number" || !Number.isFinite(i.amount)) throw new Error("Ein gültiger Betrag ist erforderlich.");
+      const { error } = await supabase.from("money").insert({ amt: i.amount, note: i.note || null });
+      if (error) throw new Error(`Buchung konnte nicht gespeichert werden: ${error.message}`);
+      return "gebucht";
+    }
     case "finance_summary": {
       const [m, g] = await Promise.all([supabase.from("money").select("amt,note,day").order("day", { ascending: false }).limit(200), supabase.from("goals").select("name,target,saved")]);
+      if (m.error) throw new Error(`Buchungen konnten nicht geladen werden: ${m.error.message}`);
+      if (g.error) throw new Error(`Sparziele konnten nicht geladen werden: ${g.error.message}`);
       const bal = (m.data ?? []).reduce((s, x) => s + Number(x.amt), 0);
       return JSON.stringify({ verfuegbar: bal, ziele: g.data, letzte: (m.data ?? []).slice(0, 8) });
     }
-    case "log_gym": await supabase.from("gym_logs").insert({ ex: i.exercise, kg: i.kg ?? 0, reps: i.reps ?? 0, sets: i.sets ?? 1 }); return "geloggt";
-    case "check_habit": await supabase.from("habit_checks").upsert({ day: getLocalDate(), habit: i.habit }); return "abgehakt";
-    case "save_fact": await supabase.from("facts").insert({ text: String(i.text).slice(0, 300) }); return "gemerkt";
+    case "log_gym": {
+      if (typeof i.exercise !== "string" || !i.exercise.trim()) throw new Error("Eine Übung ist erforderlich.");
+      const { error } = await supabase.from("gym_logs").insert({ ex: i.exercise.trim(), kg: i.kg ?? 0, reps: i.reps ?? 0, sets: i.sets ?? 1 });
+      if (error) throw new Error(`Training konnte nicht gespeichert werden: ${error.message}`);
+      return "geloggt";
+    }
+    case "check_habit": {
+      if (typeof i.habit !== "string" || !i.habit.trim()) throw new Error("Eine Gewohnheit ist erforderlich.");
+      const { error } = await supabase.from("habit_checks").upsert({ day: getLocalDate(), habit: i.habit.trim() });
+      if (error) throw new Error(`Gewohnheit konnte nicht abgehakt werden: ${error.message}`);
+      return "abgehakt";
+    }
+    case "save_fact": {
+      if (typeof i.text !== "string" || !i.text.trim()) throw new Error("Ein Fakt ist erforderlich.");
+      const { error } = await supabase.from("facts").insert({ text: i.text.trim().slice(0, 300) });
+      if (error) throw new Error(`Fakt konnte nicht gespeichert werden: ${error.message}`);
+      return "gemerkt";
+    }
     case "portfolio": if (!process.env.ALPACA_KEY) return "Noch kein Broker verbunden."; return JSON.stringify({ konto: await alpaca("/account"), positionen: await alpaca("/positions") });
     default: return "unbekanntes Tool";
   }

@@ -1,9 +1,9 @@
 import { getSupabaseClient } from "./supabase";
 import { prayerTimes } from "./prayer";
+import { getLocalDateOffset } from "./task-utils";
 
-export function tomorrowBerlin() {
-  const d = new Date(Date.now() + 864e5);
-  const iso = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Berlin" }).format(d);
+export function tomorrowBerlin(now = new Date()) {
+  const iso = getLocalDateOffset(1, now);
   const weekday = new Date(iso + "T12:00:00Z").getUTCDay();
   return { iso, weekday };
 }
@@ -17,6 +17,9 @@ export async function loadTomorrow() {
     supabase.from("breaks").select("*").lte("start_date", iso).gte("end_date", iso),
     prayerTimes(iso),
   ]);
+  for (const [name, result] of [["Routinen", r], ["Termine", e], ["Pausen", b]] as const) {
+    if (result.error) throw new Error(`${name} konnten nicht aus Supabase geladen werden: ${result.error.message}`);
+  }
   const paused = new Set((b.data ?? []).flatMap((x) => x.categories as string[]));
   const items = [
     ...(r.data ?? []),
@@ -34,7 +37,7 @@ export async function askClaude(userText: string, history: { role: "user" | "ass
   const client = new Anthropic();
   const plan = await loadTomorrow();
   const res = await client.messages.create({
-    model: "claude-sonnet-5-5",
+    model: process.env.ANTHROPIC_MODEL || "claude-sonnet-5-5",
     max_tokens: 800,
     system:
       "Du bist Jarvis, der persönliche Assistent von Youssef. Antworte auf Deutsch, kurz und klar. " +

@@ -6,6 +6,7 @@ import {
   addCalendarDays,
   getCalendarWeek,
   getLocalDate,
+  getLocalDateOffset,
   isIsoDate,
   resolveTaskDateRange,
   runTaskCreationOnce,
@@ -279,6 +280,20 @@ test("complete_task reports missing rows and database errors", async (t) => {
   });
 });
 
+test("database write tools surface Supabase errors instead of claiming success", async (t) => {
+  for (const [name, input] of [
+    ["add_event", { title: "Termin", day: "2026-10-20" }],
+    ["log_money", { amount: -12, note: "Essen" }],
+    ["log_gym", { exercise: "Kniebeugen" }],
+    ["save_fact", { text: "Mag Tee" }],
+  ] as const) {
+    await t.test(name, async () => {
+      const { client } = createClient({ data: null, error: { message: "write failed" } });
+      await assert.rejects(runTool(name, input, client), /write failed/);
+    });
+  }
+});
+
 test("date helpers use Berlin local calendar dates and Monday-to-Sunday weeks", async (t) => {
   await t.test("Berlin date around UTC midnight", () => {
     assert.equal(getLocalDate(new Date("2026-10-19T22:30:00.000Z")), "2026-10-20");
@@ -291,6 +306,10 @@ test("date helpers use Berlin local calendar dates and Monday-to-Sunday weeks", 
   await t.test("weekend boundaries and calendar arithmetic", () => {
     assert.deepEqual(getCalendarWeek("2026-10-24"), { startDate: "2026-10-19", endDate: "2026-10-25" });
     assert.equal(addCalendarDays("2026-12-31", 1), "2027-01-01");
+  });
+  await t.test("tomorrow uses the next Berlin calendar day across DST changes", () => {
+    assert.equal(getLocalDateOffset(1, new Date("2026-03-28T22:30:00.000Z")), "2026-03-29");
+    assert.equal(getLocalDateOffset(1, new Date("2026-10-24T21:30:00.000Z")), "2026-10-25");
   });
   await t.test("strict ISO validation", () => {
     assert.equal(isIsoDate("2026-02-28"), true);

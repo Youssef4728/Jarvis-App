@@ -5,12 +5,15 @@ import { TOOLS, runTool } from "./tools";
 import { getLocalDate, runTaskCreationOnce } from "./task-utils";
 
 export async function runAgent(text: string, save = true, requestId: string = randomUUID()) {
-  const client = new Anthropic();
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error("claude_not_configured");
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: 25_000, maxRetries: 1 });
   const supabase = getSupabaseClient();
   const [facts, hist] = await Promise.all([
     supabase.from("facts").select("text"),
     supabase.from("messages").select("role,content").order("id", { ascending: false }).limit(20),
   ]);
+  if (facts.error) throw new Error(`Fakten konnten nicht geladen werden: ${facts.error.message}`);
+  if (hist.error) throw new Error(`Chat-Verlauf konnte nicht geladen werden: ${hist.error.message}`);
   const past = (hist.data ?? []).reverse().map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
   while (past.length && past[0].role !== "user") past.shift();
   const messages: Anthropic.MessageParam[] = [...past, { role: "user", content: text }];
@@ -27,10 +30,13 @@ export async function runAgent(text: string, save = true, requestId: string = ra
 
   const taskCreations = new Map<string, Promise<string>>();
   for (let step = 0; step < 6; step++) {
-    const res = await client.messages.create({ model: "claude-sonnet-5-5", max_tokens: 1200, system, tools: TOOLS, messages });
+    const res = await client.messages.create({ model: process.env.ANTHROPIC_MODEL || "claude-sonnet-5-5", max_tokens: 1200, system, tools: TOOLS, messages });
     if (res.stop_reason !== "tool_use") {
       const out = res.content.map((c) => (c.type === "text" ? c.text : "")).join("");
-      if (save) await supabase.from("messages").insert([{ role: "user", content: text }, { role: "assistant", content: out }]);
+      if (save) {
+        const { error } = await supabase.from("messages").insert([{ role: "user", content: text }, { role: "assistant", content: out }]);
+        if (error) console.error("[agent] chat response was not persisted", { message: error.message });
+      }
       return out;
     }
     messages.push({ role: "assistant", content: res.content });

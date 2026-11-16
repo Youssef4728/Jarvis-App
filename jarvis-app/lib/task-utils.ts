@@ -24,6 +24,10 @@ export function getLocalDate(now = new Date()): string {
   return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Berlin" }).format(now);
 }
 
+export function getLocalDateOffset(days: number, now = new Date()): string {
+  return addCalendarDays(getLocalDate(now), days);
+}
+
 export function addCalendarDays(date: string, days: number): string {
   if (!isIsoDate(date) || !Number.isInteger(days)) throw new Error("Ungültiges Datum.");
   const [year, month, day] = date.split("-").map(Number);
