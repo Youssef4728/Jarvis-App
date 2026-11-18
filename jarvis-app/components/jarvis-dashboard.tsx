@@ -4,6 +4,33 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import Link from "next/link";
 import DevelopmentCenter from "@/components/development-center";
 
+type BrowserSpeechRecognitionEvent = Event & {
+  resultIndex: number;
+  results: ArrayLike<{
+    isFinal: boolean;
+    0: { transcript: string };
+  }>;
+};
+type BrowserSpeechRecognition = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  onresult: ((event: BrowserSpeechRecognitionEvent) => void) | null;
+  onerror: ((event: Event & { error: string }) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+};
+type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
+
+declare global {
+  interface Window {
+    SpeechRecognition?: BrowserSpeechRecognitionConstructor;
+    webkitSpeechRecognition?: BrowserSpeechRecognitionConstructor;
+  }
+}
+
 type Task = { id: string; text: string; due: string | null; done: boolean; priority: "high" | "normal" | "low" };
 type ScheduleItem = { id?: string; title: string; time: string | null; category: string };
 type DashboardData = {
@@ -78,6 +105,10 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
   return <svg {...common}>{paths[name] ?? paths.spark}</svg>;
 }
 
+    microphone: <><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10v2a7 7 0 0 0 14 0v-2m-7 9v3m-4 0h8" /></>,
+    volume: <><path d="M4 10v4h4l5 4V6l-5 4H4Z" /><path d="M17 9a5 5 0 0 1 0 6m3-9a9 9 0 0 1 0 12" /></>,
+    stop: <rect x="6" y="6" width="12" height="12" rx="2" />,
+    repeat: <><path d="m17 2 4 4-4 4" /><path d="M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4" /><path d="M21 13v2a3 3 0 0 1-3 3H3" /></>,
 function Card({ children, className = "", id, ariaLabelledby }: { children: ReactNode; className?: string; id?: string; ariaLabelledby?: string }) {
   return <section id={id} className={`surface-card ${className}`} aria-labelledby={ariaLabelledby}>{children}</section>;
 }
@@ -144,6 +175,13 @@ export default function JarvisDashboard() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [jobRequest, setJobRequest] = useState("");
   const [jobError, setJobError] = useState("");
+  const [speechRecognitionSupported, setSpeechRecognitionSupported] = useState(false);
+  const [speechSynthesisSupported, setSpeechSynthesisSupported] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
+  const [voiceMode, setVoiceMode] = useState(false);
+  const [voiceTranscript, setVoiceTranscript] = useState("");
+  const [voiceError, setVoiceError] = useState("");
   const [jobBusy, setJobBusy] = useState(false);
   const [selectedJob, setSelectedJob] = useState("");
   const [jobDetails, setJobDetails] = useState<JobDetails | null>(null);
@@ -157,9 +195,26 @@ export default function JarvisDashboard() {
 
   useEffect(() => {
     setPw(localStorage.getItem("pw") ?? "");
+  const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const voiceModeRef = useRef(false);
+  const busyRef = useRef(false);
+  const speakingRef = useRef(false);
+  const lastSpokenTextRef = useRef("");
+  const recognitionRestartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const savedTheme = localStorage.getItem("jarvis-theme");
     if (savedTheme === "light" || savedTheme === "dark") setTheme(savedTheme);
     setCollapsed(localStorage.getItem("jarvis-sidebar-collapsed") === "true");
+  useEffect(() => {
+    setSpeechRecognitionSupported(Boolean(window.SpeechRecognition ?? window.webkitSpeechRecognition));
+    setSpeechSynthesisSupported("speechSynthesis" in window && "SpeechSynthesisUtterance" in window);
+    return () => {
+      if (recognitionRestartTimer.current) clearTimeout(recognitionRestartTimer.current);
+      recognitionRef.current?.abort();
+      window.speechSynthesis?.cancel();
+    };
+  }, []);
+
   }, []);
 
   useEffect(() => {
@@ -279,16 +334,193 @@ export default function JarvisDashboard() {
     dashboardLoaded.current = false;
   }
 
+    voiceModeRef.current = false;
+    setVoiceMode(false);
+    recognitionRef.current?.abort();
+    recognitionRef.current = null;
+    window.speechSynthesis?.cancel();
+    speakingRef.current = false;
+    setListening(false);
+    setSpeaking(false);
   async function sendMessage(text: string, briefing = false) {
-    if (!text.trim() || busy) return;
+    if (!text.trim() || busyRef.current) return;
     const requestId = chatRequestIds.current.get(text) ?? crypto.randomUUID();
     chatRequestIds.current.set(text, requestId);
     setChat((current) => [...current, { role: "user", text }]);
+  function startListening() {
+    setVoiceTranscript("");
+    const SpeechRecognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setVoiceError("Die deutsche Spracherkennung wird von diesem Browser nicht unterstützt.");
+      return;
+    }
+
+    if (speakingRef.current) stopSpeaking();
+    if (recognitionRestartTimer.current) {
+      clearTimeout(recognitionRestartTimer.current);
+      recognitionRestartTimer.current = null;
+    }
+    recognitionRef.current?.abort();
+    const recognition = new SpeechRecognition();
+    recognition.lang = "de-DE";
+    recognition.interimResults = true;
+    recognition.continuous = false;
+    recognition.onresult = (event) => {
+      if (recognitionRef.current !== recognition) return;
+      const results = Array.from({ length: event.results.length }, (_, index) => event.results[index]);
+      const transcriptPreview = results.map((result) => result[0].transcript.trim()).filter(Boolean).join(" ");
+      setVoiceTranscript(transcriptPreview);
+      const transcript = Array.from({ length: event.results.length - event.resultIndex }, (_, index) => {
+        const result = event.results[event.resultIndex + index];
+        return result.isFinal ? result[0].transcript.trim() : "";
+      }).filter(Boolean).join(" ");
+      if (!transcript) return;
+
+      if (voiceModeRef.current) {
+        setInput("");
+        void sendMessage(transcript);
+      } else {
+        setInput((current) => [current.trim(), transcript].filter(Boolean).join(" "));
+      }
+    };
+    recognition.onerror = (event) => {
+      if (recognitionRef.current !== recognition) return;
+      const messages: Record<string, string> = {
+        "not-allowed": "Der Mikrofonzugriff wurde verweigert. Erlaube ihn in den Browser-Einstellungen.",
+        "service-not-allowed": "Der Browser-Sprachdienst ist nicht verfügbar oder wurde blockiert.",
+        "audio-capture": "Es wurde kein verwendbares Mikrofon gefunden.",
+        network: "Die Spracherkennung benötigt eine verfügbare Netzwerkverbindung.",
+        "no-speech": "Es wurde keine Sprache erkannt.",
+      };
+      if (event.error !== "aborted") setVoiceError(messages[event.error] ?? "Die Spracherkennung ist fehlgeschlagen.");
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+        voiceModeRef.current = false;
+        setVoiceMode(false);
+      }
+    };
+    recognition.onend = () => {
+      if (recognitionRef.current !== recognition) return;
+      recognitionRef.current = null;
+      setListening(false);
+      if (voiceModeRef.current && !busyRef.current && !speakingRef.current) {
+        recognitionRestartTimer.current = setTimeout(() => {
+          recognitionRestartTimer.current = null;
+          if (voiceModeRef.current && !busyRef.current && !speakingRef.current) startListening();
+        }, 500);
+      }
+    };
+    recognitionRef.current = recognition;
+    setVoiceError("");
+    try {
+      recognition.start();
+      setListening(true);
+    } catch {
+      recognitionRef.current = null;
+      setListening(false);
+      voiceModeRef.current = false;
+      setVoiceMode(false);
+      setVoiceError("Das Mikrofon konnte nicht gestartet werden. Bitte versuche es erneut.");
+    }
+  }
+
+  function stopListening() {
+    if (recognitionRestartTimer.current) {
+      clearTimeout(recognitionRestartTimer.current);
+      recognitionRestartTimer.current = null;
+    }
+    const recognition = recognitionRef.current;
+    recognitionRef.current = null;
+    setListening(false);
+    recognition?.stop();
+  }
+
+  function abortListening() {
+    if (recognitionRestartTimer.current) {
+      clearTimeout(recognitionRestartTimer.current);
+      recognitionRestartTimer.current = null;
+    }
+    const recognition = recognitionRef.current;
+    recognitionRef.current = null;
+    setListening(false);
+    setVoiceTranscript("");
+    recognition?.abort();
+  }
+
+  function toggleVoiceMode() {
+    if (voiceModeRef.current) {
+      voiceModeRef.current = false;
+      setVoiceMode(false);
+      abortListening();
+      return;
+    }
+    if (!speechRecognitionSupported || !speechSynthesisSupported) {
+      setVoiceError("Der Voice-Modus benötigt deutsche Spracherkennung und Sprachausgabe, die dieser Browser bereitstellen muss.");
+      return;
+    }
+    voiceModeRef.current = true;
+    setVoiceMode(true);
+    startListening();
+  }
+
+  function speakText(text: string) {
+    if (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) {
+      setVoiceError("Die Sprachausgabe wird von diesem Browser nicht unterstützt.");
+      return;
+    }
+    stopListening();
+    utteranceRef.current = null;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "de-DE";
+    const germanVoice = window.speechSynthesis.getVoices().find((voice) => voice.lang.toLowerCase().startsWith("de"));
+    if (germanVoice) utterance.voice = germanVoice;
+    speakingRef.current = true;
+    setSpeaking(true);
+    setVoiceError("");
+    lastSpokenTextRef.current = text;
+    utteranceRef.current = utterance;
+    utterance.onend = () => {
+      if (utteranceRef.current !== utterance) return;
+      utteranceRef.current = null;
+      speakingRef.current = false;
+      setSpeaking(false);
+      if (voiceModeRef.current && !busyRef.current) startListening();
+    };
+    utterance.onerror = () => {
+      if (utteranceRef.current !== utterance) return;
+      utteranceRef.current = null;
+      speakingRef.current = false;
+      setSpeaking(false);
+      setVoiceError("Die Sprachausgabe konnte nicht abgespielt werden.");
+    };
+    try {
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      utteranceRef.current = null;
+      speakingRef.current = false;
+      setSpeaking(false);
+      setVoiceError("Die Sprachausgabe konnte nicht gestartet werden.");
+    }
+  }
+
+  function speakLatestReply() {
+    const latestReply = [...chat].reverse().find((message) => message.role === "assistant");
+    if (latestReply) speakText(latestReply.text);
+  }
+
+  function stopSpeaking() {
+    utteranceRef.current = null;
+    window.speechSynthesis?.cancel();
+    speakingRef.current = false;
+    setSpeaking(false);
+  }
+
     setBusy(true);
     try {
       const response = await fetch("/api/chat", {
         method: "POST", headers: { ...appPasswordHeader(pw), "Content-Type": "application/json" },
         body: JSON.stringify({ message: text, request_id: requestId }),
+    busyRef.current = true;
       });
       if (response.status === 401) {
         localStorage.removeItem("pw"); setPw(""); setAuthError("Passwort stimmt nicht. Bitte erneut anmelden."); return;
@@ -301,6 +533,7 @@ export default function JarvisDashboard() {
       void loadJobs(pw).catch(() => {});
     } catch (error) {
       const message = error instanceof Error ? error.message : "Nachricht konnte nicht gesendet werden.";
+      if (voiceModeRef.current) speakText(data.reply);
       setChat((current) => [...current, { role: "assistant", text: message }]);
       if (briefing) setIntelligence(`Fehler: ${message}`);
     } finally {
@@ -309,7 +542,9 @@ export default function JarvisDashboard() {
   }
 
   function send() {
-    if (!input.trim() || busy) return;
+      busyRef.current = false;
+    if (!input.trim() || busyRef.current) return;
+      if (voiceModeRef.current && !speakingRef.current && !recognitionRef.current) startListening();
     const text = input.trim(); setInput(""); void sendMessage(text);
   }
 
@@ -318,6 +553,17 @@ export default function JarvisDashboard() {
     setIntelligence("");
     void sendMessage(prompt, true);
     document.getElementById("assistant")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  function toggleListening() {
+    if (listening) {
+      if (voiceModeRef.current) {
+        voiceModeRef.current = false;
+        setVoiceMode(false);
+      }
+      abortListening();
+    }
+    else if (!busyRef.current) startListening();
+  }
+
   }
 
   async function completeTask(task: Task) {
@@ -528,9 +774,18 @@ export default function JarvisDashboard() {
           </Card>
 
           <Card className="chat-card">
-            <SectionTitle eyebrow="DIRECT CHANNEL" title="AI Assistant" detail="Sprich mit JARVIS" />
+            <SectionTitle eyebrow="DIRECT CHANNEL" title="AI Assistant" detail="Sprich mit JARVIS" action={<button className={`secondary-button voice-mode-button${voiceMode ? " is-active" : ""}`} type="button" onClick={toggleVoiceMode} aria-pressed={voiceMode} title={voiceMode ? "Voice-Modus beenden" : "Voice-Modus starten"}><Icon name="volume" size={15} />{voiceMode ? "Voice-Modus aktiv" : "Voice-Modus starten"}</button>} />
             <div className="chat-stream" aria-live="polite">{chat.length ? chat.map((message, index) => <div className={`chat-message ${message.role}`} key={`${index}-${message.role}`}><span className="chat-avatar">{message.role === "assistant" ? <Icon name="spark" size={14} /> : "Y"}</span><p>{message.text}</p></div>) : <EmptyState text="Stelle eine Frage zu deiner Planung, deinen Aufgaben oder Routinen." compact />}</div>
-            <form className="chat-form" onSubmit={(event) => { event.preventDefault(); send(); }}><input value={input} onChange={(event) => setInput(event.target.value)} placeholder="Frag JARVIS etwas …" aria-label="Nachricht an JARVIS" /><button className="send-button" type="submit" disabled={busy || !input.trim()} aria-label="Nachricht senden"><Icon name="arrow" /></button></form>
+            <form className="chat-form" onSubmit={(event) => { event.preventDefault(); send(); }}><input value={input} onChange={(event) => setInput(event.target.value)} placeholder="Frag JARVIS etwas …" aria-label="Nachricht an JARVIS" /><button className={`voice-input-button${listening ? " is-active" : ""}`} type="button" onClick={toggleListening} disabled={busy && !listening} aria-pressed={listening} aria-label={listening ? "Aufnahme abbrechen" : "Spracheingabe starten"} title={listening ? "Aufnahme abbrechen" : "Spracheingabe starten"}><Icon name={listening ? "stop" : "microphone"} size={18} /><span className="voice-input-label">{listening ? "Abbrechen" : "Sprechen"}</span></button><button className="send-button" type="submit" disabled={busy || !input.trim()} aria-label="Nachricht senden"><Icon name="arrow" /></button></form>
+            {voiceTranscript && <p className="voice-transcript" aria-live="polite"><strong>Erkannt:</strong> {voiceTranscript}</p>}
+            <div className="chat-voice-controls" aria-label="Sprachausgabe">
+              <button className="voice-control-button" type="button" onClick={speakLatestReply} disabled={!speechSynthesisSupported || !chat.some((message) => message.role === "assistant")}><Icon name="volume" size={14} />Vorlesen</button>
+              <button className="voice-control-button" type="button" onClick={() => speakText(lastSpokenTextRef.current)} disabled={!speechSynthesisSupported || !lastSpokenTextRef.current}><Icon name="repeat" size={14} />Wiederholen</button>
+              <button className="voice-control-button" type="button" onClick={stopSpeaking} disabled={!speaking}><Icon name="stop" size={14} />Stoppen</button>
+              <span className="voice-status" role="status" aria-live="polite">{listening ? "Hört zu · Deutsch" : busy ? "Verarbeitet" : speaking ? "Antwortet" : "Bereit · Deutsch"}{voiceError ? ` · ${voiceError}` : !speechRecognitionSupported ? " · Spracherkennung im Browser nicht verfügbar" : ""}</span>
+            </div>
+            <p className="voice-disclaimer">Nutzt die integrierten Sprachfunktionen des Browsers; Unterstützung und Verarbeitung hängen von Browser und Gerät ab.</p>
+            {voiceError && <p className="voice-error" role="alert">{voiceError}</p>}
           </Card>
         </section>
 

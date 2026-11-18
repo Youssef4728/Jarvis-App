@@ -245,11 +245,27 @@ a { color: inherit; text-decoration: none; }
 .chat-message.user .chat-avatar { background: var(--surface-raised); color: var(--text-soft); }
 .chat-message p { max-width: calc(100% - 32px); margin: 0; padding: 7px 9px; border-radius: 8px; background: var(--surface-soft); color: var(--text-soft); font-size: 10px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .chat-message.user p { background: var(--accent-soft); color: var(--text); }
-.chat-form { display: flex; gap: 7px; margin-top: 10px; }
+.chat-form { display: flex; min-width: 0; align-items: stretch; gap: 7px; margin-top: 10px; }
 .chat-form input, .password-field input { width: 100%; min-width: 0; height: 38px; padding: 0 11px; border: 1px solid var(--border); border-radius: 9px; outline: none; background: var(--surface-soft); color: var(--text); font-size: 10px; }
+.chat-form input { width: auto; flex: 1 1 0%; }
 .chat-form input:focus, .password-field input:focus, .agent-form textarea:focus { border-color: rgba(80,217,233,.5); box-shadow: 0 0 0 3px rgba(80,217,233,.08); }
 .chat-form input::placeholder, .agent-form textarea::placeholder { color: var(--muted); }
 .send-button { display: grid; width: 38px; height: 38px; flex: 0 0 38px; place-items: center; border: 0; border-radius: 9px; background: var(--accent-strong); color: #06171a; }
+.voice-mode-button { min-height: 34px; padding-inline: 9px; font-size: 9px; }
+.voice-mode-button.is-active, .voice-input-button.is-active { border-color: rgba(80,217,233,.45); background: var(--accent-soft); color: var(--accent); }
+.voice-input-button { display: inline-flex; width: 92px; height: 38px; flex: 0 0 92px; align-items: center; justify-content: center; gap: 6px; padding: 0 7px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-soft); color: var(--text-soft); font-size: 9px; font-weight: 600; white-space: nowrap; }
+.voice-input-button.is-active { border-color: rgba(241,123,135,.45); background: rgba(241,123,135,.12); color: var(--red); }
+.voice-input-label { display: inline; }
+.voice-input-button:disabled, .voice-control-button:disabled { cursor: not-allowed; opacity: .45; }
+.chat-voice-controls { display: flex; min-height: 34px; align-items: center; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.voice-control-button { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 5px; padding: 0 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); color: var(--text-soft); font-size: 9px; }
+.voice-control-button:hover:not(:disabled), .voice-input-button:hover:not(:disabled) { border-color: rgba(80,217,233,.35); color: var(--accent); }
+.voice-status { min-width: 0; margin-left: auto; color: var(--muted); font-size: 9px; text-align: right; }
+.voice-transcript { max-height: 48px; overflow: auto; margin: 6px 0 0; color: var(--text-soft); font-size: 9px; line-height: 1.45; overflow-wrap: anywhere; }
+.voice-transcript strong { color: var(--accent); }
+.voice-disclaimer, .voice-error { margin: 3px 0 0; color: var(--muted); font-size: 8px; line-height: 1.4; }
+.voice-error { color: var(--red); }
+.voice-input-button:focus-visible, .voice-control-button:focus-visible, .voice-mode-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .agents-card { margin-top: 18px; }
 .agent-form { display: flex; align-items: flex-end; gap: 10px; }
 .agent-form textarea { width: 100%; min-height: 70px; resize: vertical; padding: 10px 11px; border: 1px solid var(--border); border-radius: 9px; outline: none; background: var(--surface-soft); color: var(--text); font-size: 10px; line-height: 1.5; }
@@ -387,6 +403,13 @@ a { color: inherit; text-decoration: none; }
   .development-item { align-items: flex-start; flex-direction: column; }
   .development-item > .secondary-button { align-self: flex-start; }
   .agent-job-layout { grid-template-columns: 1fr; }
+  .chat-card .section-title { align-items: flex-start; }
+  .chat-form input { font-size: 16px; }
+  .voice-mode-button { min-height: 38px; white-space: nowrap; }
+  .chat-voice-controls { gap: 6px; }
+  .voice-control-button, .voice-input-button { min-height: 40px; }
+  .voice-input-button { height: 40px; }
+  .voice-status { width: 100%; margin: 2px 0 0; text-align: left; }
   .agent-form { align-items: stretch; flex-direction: column; }
   .agent-form .primary-button { align-self: flex-start; }
   .settings-card { align-items: flex-start; flex-direction: column; }
