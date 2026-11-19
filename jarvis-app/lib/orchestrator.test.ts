@@ -78,3 +78,17 @@ test("memory retrieval prioritizes facts relevant to the request", () => {
     ["Nächste Prüfung ist Mathematik.", "Youssef mag Tee."],
   );
 });
+
+test("day planning request creates learning, calendar and fitness actions", () => {
+  const result = analyzeOrchestratorInput(
+    "Plane morgen meinen Tag. Ich habe um 16 Uhr Fußball, muss Englisch lernen und will ins Fitnessstudio.",
+    new Date("2026-11-19T10:00:00Z"),
+  );
+  assert.ok(result.intents.includes("learning"));
+  assert.ok(result.intents.includes("fitness"));
+  assert.ok(result.intents.includes("calendar"));
+  assert.ok(result.intents.includes("daily_planning"));
+  assert.ok(result.actions.some((action) => action.type === "add_task"));
+  assert.ok(result.actions.some((action) => action.type === "add_event"));
+  assert.ok(result.actions.some((action) => action.type === "generate_daily_plan"));
+});

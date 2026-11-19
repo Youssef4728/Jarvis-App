@@ -25,6 +25,8 @@ export type OrchestratorAction =
   | { type: "add_event"; title: string; day: string; time: string | null; category: string }
   | { type: "log_gym"; exercise: string }
   | { type: "save_fact"; text: string }
+  | { type: "generate_daily_plan"; date: string }
+  | { type: "generate_weekly_plan"; date: string }
   | { type: "approval_required"; reason: "delete" | "cancel_external" | "financial_transaction" | "sensitive_change" }
   | { type: "clarify"; question: string };
 
@@ -86,7 +88,7 @@ export function analyzeOrchestratorInput(input: string, now = new Date()): Orche
     intents.add("learning");
     tools.add("list_tasks");
   }
-  if (/\b(training|gym|fitness|brust|rücken|laufen|kraft|trainiert|trainiere|trainieren|dehnen)\b/.test(lower)) {
+  if (/\b(training|gym|fitness|fitnessstudio|brust|rücken|laufen|kraft|trainiert|trainiere|trainieren|dehnen)\b/.test(lower)) {
     intents.add("fitness");
     tools.add("list_tasks");
   }
@@ -166,13 +168,27 @@ export function analyzeOrchestratorInput(input: string, now = new Date()): Orche
   }
 
   const date = resolveGermanDate(text, now);
-  const explicitEvent = /\b(termin|training|gym|meeting|besprechung|feier|fahrt|fahrt nach|veranstaltung)\b/i.test(text);
+  const explicitEvent = /\b(termin|training|gym|meeting|besprechung|feier|fahrt|fahrt nach|veranstaltung|fußball|fussball)\b/i.test(text);
   if (explicitEvent && date) {
     intents.add("calendar");
     tools.add("add_event");
     const time = extractTime(text);
     const category = /\b(training|gym|laufen|kraft)\b/i.test(text) ? "fussball" : "termin";
-    actions.push({ type: "add_event", title: text.replace(/^(ich habe|ich muss|setze|termin:?)\s*/i, "").replace(/\b(morgen|heute|übermorgen|um\s+\d{1,2}(?::\d{2})?\s*uhr)\b/gi, "").trim().slice(0, 160) || "Termin", day: date, time, category });
+    const title = /\bfußball\b/i.test(text) ? "Fußball" : /\bfitnessstudio\b/i.test(text) ? "Fitnessstudio" : text.replace(/^(ich habe|ich muss|setze|termin:?)\s*/i, "").replace(/\b(morgen|heute|übermorgen|um\s+\d{1,2}(?::\d{2})?\s*uhr)\b/gi, "").trim().slice(0, 160) || "Termin";
+    actions.push({ type: "add_event", title, day: date, time, category });
+  }
+
+  if (/\b(plane|planung|planen)\b.*\b(morgen|heute|kommende woche|nächste woche)\b/i.test(text)) {
+    if (/\b(kommende|nächste)\s+woche\b/i.test(text)) {
+      actions.push({ type: "generate_weekly_plan", date: getLocalDate(now) });
+    } else {
+      actions.push({ type: "generate_daily_plan", date: date ?? getLocalDate(now) });
+    }
+  }
+
+  if (/\bfitnessstudio\b/i.test(text) && date) {
+    const alreadyAdded = actions.some((action) => action.type === "add_task" && action.title.toLocaleLowerCase("de").includes("fitness"));
+    if (!alreadyAdded) actions.push({ type: "add_task", title: "Ins Fitnessstudio gehen", due: date, priority: "normal" });
   }
 
   if (/(\bhabe\b.*\b(trainiert|gelaufen)\b|\bbrust und rücken\b)/.test(lower) || /\blog(?:ge)?\s*(?:mein)?\s*training\b/.test(lower)) {

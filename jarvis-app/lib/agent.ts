@@ -7,6 +7,7 @@ import { hasConfirmedZeroCostQuota } from "./zero-cost";
 import { createAutomationJob } from "./automation/service";
 import { runPlanningIntent } from "./planning-chat";
 import { analyzeOrchestratorInput, selectRelevantMemory } from "./orchestrator";
+import { executeCentralActions } from "./execution-engine";
 
 const DEVELOPMENT_REQUEST_PATTERN = /\b(entwickle|entwickeln|implementiere|implementieren|baue|bauen|erstelle|erstellen|programmiere|programmieren|fixe|repariere|reparieren|build|implement|create|fix)\b/i;
 
@@ -32,6 +33,7 @@ export async function runAgent(text: string, save = true, requestId: string = ra
     return reply;
   }
   if (orchestration.shouldRequireApproval) {
+    await executeCentralActions(text, requestId, orchestration.actions);
     const reply = "Diese Änderung hat größere Auswirkungen. Ich habe nichts ausgeführt. Bitte bestätige ausdrücklich, welche Aktion ausgeführt werden soll.";
     if (save) {
       const { error } = await getSupabaseClient().from("messages").insert([{ role: "user", content: text }, { role: "assistant", content: reply }]);
@@ -39,28 +41,16 @@ export async function runAgent(text: string, save = true, requestId: string = ra
     }
     return reply;
   }
-  if (!hasConfirmedZeroCostQuota("anthropic") && orchestration.actions.length > 0) {
-    const messages: string[] = [];
-    for (const action of orchestration.actions) {
-      try {
-        if (action.type === "add_task") {
-          messages.push(await runTool("add_task", { title: action.title, due: action.due, priority: action.priority }));
-        } else if (action.type === "add_event") {
-          messages.push(await runTool("add_event", { title: action.title, day: action.day, time: action.time, category: action.category }));
-        } else if (action.type === "log_gym") {
-          messages.push(await runTool("log_gym", { exercise: action.exercise }));
-        } else if (action.type === "save_fact") {
-          messages.push(await runTool("save_fact", { text: action.text }));
-        } else if (action.type === "complete_task") {
-          messages.push("Mehrere Aufgaben müssen vor dem Abhaken identifiziert werden.");
-        }
-      } catch (error) {
-        messages.push(error instanceof Error ? error.message : "Aktion konnte nicht ausgeführt werden.");
-      }
-    }
-    const reply = messages.length
-      ? messages.join(" ")
-      : "Die Nachricht wurde verstanden, aber für eine Ausführung fehlen noch sichere Details.";
+  if (orchestration.actions.length > 0) {
+    const execution = await executeCentralActions(text, requestId, orchestration.actions);
+    const completed = execution.items.filter((item) => item.status === "completed");
+    const failed = execution.items.filter((item) => item.status === "failed");
+    const lines = [
+      execution.summary,
+      ...completed.map((item) => `Erledigt: ${item.label}${item.result ? ` — ${item.result}` : ""}`),
+      ...failed.map((item) => `Fehlgeschlagen: ${item.label} — ${item.errorCode ?? "Unbekannter Fehler"}`),
+    ];
+    const reply = lines.join("\n");
     if (save) {
       const { error } = await getSupabaseClient().from("messages").insert([{ role: "user", content: text }, { role: "assistant", content: reply }]);
       if (error) throw new Error("offline_chat_persistence_failed");

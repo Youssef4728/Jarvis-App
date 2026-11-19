@@ -34,7 +34,7 @@ export async function GET(request: Request) {
     const monthStart = `${today.slice(0, 7)}-01`;
     const weekday = new Date(`${today}T12:00:00Z`).getUTCDay();
 
-    const [tasks, events, routines, breaks, money, goals, workouts, habits, checks, prayers] = await Promise.all([
+    const [tasks, events, routines, breaks, money, goals, workouts, habits, checks, actionRuns, actionItems, prayers] = await Promise.all([
       readSection("Aufgaben", supabase.from("tasks").select("id,text,due,done,priority").order("due", { ascending: true, nullsFirst: false }).limit(100), []),
       readSection("Termine", supabase.from("events").select("id,title,day,time,category,skipped").eq("day", today).eq("skipped", false).order("time"), []),
       readSection("Routinen", supabase.from("routines").select("id,title,category,weekdays,time,end_time,active").eq("active", true).contains("weekdays", [weekday]).order("time"), []),
@@ -44,6 +44,8 @@ export async function GET(request: Request) {
       readSection("Training", supabase.from("gym_logs").select("id,ex,kg,reps,sets,day", { count: "exact" }).gte("day", monthStart).lte("day", today).order("day", { ascending: false }).limit(12), []),
       readSection("Gewohnheiten", supabase.from("habits").select("name").order("name"), []),
       readSection("Gewohnheitsstatus", supabase.from("habit_checks").select("habit,day").eq("day", today), []),
+      readSection("Ausführungsstatus", supabase.from("jarvis_action_runs").select("id,request_key,status,summary,error_code,created_at,updated_at").order("updated_at", { ascending: false }).limit(20), []),
+      readSection("Ausgeführte Aktionen", supabase.from("jarvis_action_items").select("id,run_id,action_id,kind,label,status,requires_approval,result,error_code,attempts,updated_at").order("updated_at", { ascending: false }).limit(100), []),
       prayerTimes(today),
     ]);
 
@@ -60,6 +62,8 @@ export async function GET(request: Request) {
       habits: habits.data,
       habitChecks: checks.data,
       prayers,
+      actions: actionRuns.data,
+      actionItems: actionItems.data,
       errors: {
         tasks: tasks.error,
         events: events.error,
@@ -69,6 +73,8 @@ export async function GET(request: Request) {
         workouts: workouts.error,
         habits: habits.error ?? checks.error,
         prayers: prayers.length ? null : "Gebetszeiten sind derzeit nicht verfügbar.",
+        actions: actionRuns.error,
+        actionItems: actionItems.error,
       },
     });
   } catch (error) {

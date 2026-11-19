@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import Link from "next/link";
 import DevelopmentCenter from "@/components/development-center";
+import type { DailyPlan, PlanBlock, WeeklyPlan } from "@/lib/planning-engine";
+import { isTaskPriority } from "@/lib/task-utils";
 
 type BrowserSpeechRecognitionEvent = Event & {
   resultIndex: number;
@@ -45,14 +47,22 @@ type DashboardData = {
   habits: { name: string }[];
   habitChecks: { habit: string; day: string }[];
   prayers: ScheduleItem[];
+  actions: ExecutionRun[];
+  actionItems: ExecutionItem[];
   errors: Record<string, string | null>;
 };
+type PlanningData = { daily: DailyPlan; weekly: WeeklyPlan; changes?: { daily: boolean; weekly: boolean } };
+type ExecutionRun = { id: string; status: string; summary: string | null; error_code: string | null; updated_at: string };
+type ExecutionItem = { id: string; run_id: string; action_id: string; kind: string; label: string; status: string; requires_approval: boolean; result: string | null; error_code: string | null; attempts: number };
 type Job = {
   id: string; status: string; planning_attempt_count: number; github_task_id: string | null; request_text: string;
-  plan: { summary: string; prompt: string; steps: { title: string; description: string }[] } | null;
+  plan: { vision?: string; summary: string; prompt: string; steps: { id?: string; title: string; description: string; priority?: number; dependsOn?: string[]; acceptanceCriteria?: string[]; testRequirements?: string[] }[] } | null;
   review: { summary: string; prompt: string; concerns: string[] } | null;
   evaluation: { summary: string; limitations: string[] } | null; github_task_url: string | null; github_pr_url: string | null;
   github_state: string | null; failure_code: string | null; created_at: string;
+  worker_id?: string | null; heartbeat_at?: string | null; current_task?: string | null; progress?: number;
+  branch_name?: string | null; commit_sha?: string | null; test_results?: Record<string, unknown> | null;
+  cancel_requested?: boolean;
 };
 type JobDetails = {
   job: Job;
@@ -75,9 +85,10 @@ const navigation = [
 const primaryMobileNavigation = navigation.filter((item) => ["dashboard", "my-day", "tasks", "assistant"].includes(item.id));
 
 const jobStatusLabel: Record<string, string> = {
-  pending: "Wartet auf Planung", planning: "Wird geplant", awaiting_approval: "Freigabe erforderlich",
-  dispatching: "Wird übergeben", dispatch_uncertain: "Übergabe unklar – manuell prüfen", queued: "In der Warteschlange",
-  in_progress: "Agent arbeitet", evaluating: "Ergebnis wird bewertet", completed: "Abgeschlossen", failed: "Fehlgeschlagen",
+  pending: "Wartet auf Planung", planning: "OpenAI plant · Claude prüft", awaiting_approval: "Freigabe erforderlich", awaiting_resource: "Pausiert: kostenloses KI-Kontingent fehlt",
+  dispatching: "Wird übergeben", dispatch_uncertain: "Übergabe unklar – manuell prüfen", queued: "Wartet auf Coding Worker",
+  in_progress: "Codex arbeitet", evaluating: "Unabhängige Prüfung ausstehend", completed: "Abgeschlossen", failed: "Fehlgeschlagen",
+  cancelled: "Abgebrochen",
 };
 
 function Icon({ name, size = 18 }: { name: string; size?: number }) {
@@ -101,14 +112,14 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
     eye: <><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></>,
     eyeOff: <><path d="m3 3 18 18M10.6 10.6a2 2 0 0 0 2.8 2.8" /><path d="M9.9 5.2A10.8 10.8 0 0 1 12 5c6.4 0 10 7 10 7a16 16 0 0 1-3.1 3.8M6.2 6.2C3.5 8 2 12 2 12s3.6 7 10 7c1.1 0 2.1-.2 3-.5" /></>,
-  };
-  return <svg {...common}>{paths[name] ?? paths.spark}</svg>;
-}
-
     microphone: <><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10v2a7 7 0 0 0 14 0v-2m-7 9v3m-4 0h8" /></>,
     volume: <><path d="M4 10v4h4l5 4V6l-5 4H4Z" /><path d="M17 9a5 5 0 0 1 0 6m3-9a9 9 0 0 1 0 12" /></>,
     stop: <rect x="6" y="6" width="12" height="12" rx="2" />,
     repeat: <><path d="m17 2 4 4-4 4" /><path d="M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4" /><path d="M21 13v2a3 3 0 0 1-3 3H3" /></>,
+  };
+  return <svg {...common}>{paths[name] ?? paths.spark}</svg>;
+}
+
 function Card({ children, className = "", id, ariaLabelledby }: { children: ReactNode; className?: string; id?: string; ariaLabelledby?: string }) {
   return <section id={id} className={`surface-card ${className}`} aria-labelledby={ariaLabelledby}>{children}</section>;
 }
@@ -149,6 +160,7 @@ function automationErrorMessage(code: string) {
     github_http_412: "GitHub hat die Agenten-Anfrage abgelehnt. Bitte Voraussetzungen und Kontingent prüfen.",
     github_rate_limited: "GitHub begrenzt derzeit weitere Anfragen. Bitte später erneut versuchen.",
     github_dispatch_uncertain: "Der Übergabestatus ist unklar. Bitte GitHub prüfen, bevor du erneut freigibst.",
+    zero_cost_quota_unconfirmed: "Aus Kostenschutz pausiert: ein kostenloses KI-Kontingent ohne kostenpflichtigen Fallback ist nicht bestätigt.",
   };
   if (messages[code]) return messages[code];
   if (code === "openai_not_configured") return "OpenAI ist serverseitig nicht konfiguriert.";
@@ -167,14 +179,20 @@ export default function JarvisDashboard() {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardError, setDashboardError] = useState("");
+  const [planning, setPlanning] = useState<PlanningData | null>(null);
+  const [planningLoading, setPlanningLoading] = useState(false);
+  const [planningError, setPlanningError] = useState("");
+  const [planningNotice, setPlanningNotice] = useState("");
+  const [planningDate, setPlanningDate] = useState("");
+  const [selectedPlanItem, setSelectedPlanItem] = useState<PlanBlock | null>(null);
+  const [taskEdit, setTaskEdit] = useState<{ text: string; due: string; priority: Task["priority"] } | null>(null);
+  const [moveDate, setMoveDate] = useState("");
+  const [moveTime, setMoveTime] = useState("");
+  const [planningActionBusy, setPlanningActionBusy] = useState(false);
+  const [planningActionError, setPlanningActionError] = useState("");
   const [chat, setChat] = useState<{ role: "user" | "assistant"; text: string }[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [intelligence, setIntelligence] = useState("");
-  const [authError, setAuthError] = useState("");
-  const [jobs, setJobs] = useState<Job[]>([]);
-  const [jobRequest, setJobRequest] = useState("");
-  const [jobError, setJobError] = useState("");
   const [speechRecognitionSupported, setSpeechRecognitionSupported] = useState(false);
   const [speechSynthesisSupported, setSpeechSynthesisSupported] = useState(false);
   const [listening, setListening] = useState(false);
@@ -182,6 +200,11 @@ export default function JarvisDashboard() {
   const [voiceMode, setVoiceMode] = useState(false);
   const [voiceTranscript, setVoiceTranscript] = useState("");
   const [voiceError, setVoiceError] = useState("");
+  const [intelligence, setIntelligence] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobRequest, setJobRequest] = useState("");
+  const [jobError, setJobError] = useState("");
   const [jobBusy, setJobBusy] = useState(false);
   const [selectedJob, setSelectedJob] = useState("");
   const [jobDetails, setJobDetails] = useState<JobDetails | null>(null);
@@ -189,12 +212,8 @@ export default function JarvisDashboard() {
   const [taskBusy, setTaskBusy] = useState("");
   const [taskError, setTaskError] = useState("");
   const [habitBusy, setHabitBusy] = useState("");
+  const [actionRetryBusy, setActionRetryBusy] = useState("");
   const chatRequestIds = useRef(new Map<string, string>());
-  const jobIdempotencyKey = useRef<string | null>(null);
-  const dashboardLoaded = useRef(false);
-
-  useEffect(() => {
-    setPw(localStorage.getItem("pw") ?? "");
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const voiceModeRef = useRef(false);
@@ -202,9 +221,9 @@ export default function JarvisDashboard() {
   const speakingRef = useRef(false);
   const lastSpokenTextRef = useRef("");
   const recognitionRestartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const savedTheme = localStorage.getItem("jarvis-theme");
-    if (savedTheme === "light" || savedTheme === "dark") setTheme(savedTheme);
-    setCollapsed(localStorage.getItem("jarvis-sidebar-collapsed") === "true");
+  const jobIdempotencyKey = useRef<string | null>(null);
+  const dashboardLoaded = useRef(false);
+
   useEffect(() => {
     setSpeechRecognitionSupported(Boolean(window.SpeechRecognition ?? window.webkitSpeechRecognition));
     setSpeechSynthesisSupported("speechSynthesis" in window && "SpeechSynthesisUtterance" in window);
@@ -215,6 +234,11 @@ export default function JarvisDashboard() {
     };
   }, []);
 
+  useEffect(() => {
+    setPw(localStorage.getItem("pw") ?? "");
+    const savedTheme = localStorage.getItem("jarvis-theme");
+    if (savedTheme === "light" || savedTheme === "dark") setTheme(savedTheme);
+    setCollapsed(localStorage.getItem("jarvis-sidebar-collapsed") === "true");
   }, []);
 
   useEffect(() => {
@@ -244,6 +268,16 @@ export default function JarvisDashboard() {
     setDashboard(data);
   }
 
+  async function loadPlanning(password: string, signal?: AbortSignal) {
+    const response = await fetch("/api/planning", { headers: appPasswordHeader(password), signal });
+    if (response.status === 401) throw new Error("Passwort stimmt nicht. Bitte erneut anmelden.");
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error ?? `Planung konnte nicht geladen werden (HTTP ${response.status}).`);
+    if (!data.daily || !Array.isArray(data.weekly?.days)) throw new Error("Die Planungsantwort ist ungültig.");
+    setPlanning(data);
+    setPlanningNotice(data.changes?.daily || data.changes?.weekly ? "Der Plan wurde anhand aktueller Daten angepasst." : "");
+  }
+
   async function loadJobs(password: string) {
     const response = await fetch("/api/automation/jobs", { headers: appPasswordHeader(password) });
     if (response.status === 401) throw new Error("Passwort stimmt nicht. Bitte erneut anmelden.");
@@ -266,14 +300,27 @@ export default function JarvisDashboard() {
     const controller = new AbortController();
     const refresh = async () => {
       if (!dashboardLoaded.current) setDashboardLoading(true);
+      setPlanningLoading(true);
       try {
-        await loadDashboard(pw, controller.signal);
+        const results = await Promise.allSettled([
+          loadDashboard(pw, controller.signal),
+          loadPlanning(pw, controller.signal),
+        ]);
+        if (results[0].status === "rejected") throw results[0].reason;
         dashboardLoaded.current = true;
-        if (!cancelled) setDashboardError("");
+        if (!cancelled) {
+          setDashboardError("");
+          setPlanningError(results[1].status === "rejected"
+            ? results[1].reason instanceof Error ? results[1].reason.message : "Planung konnte nicht geladen werden."
+            : "");
+        }
       } catch (error) {
         if (!cancelled && !controller.signal.aborted) setDashboardError(error instanceof Error ? error.message : "Dashboard konnte nicht geladen werden.");
       } finally {
-        if (!cancelled) setDashboardLoading(false);
+        if (!cancelled) {
+          setDashboardLoading(false);
+          setPlanningLoading(false);
+        }
       }
     };
     void refresh();
@@ -301,6 +348,9 @@ export default function JarvisDashboard() {
   const berlinDatePart = (type: string) => berlinDateParts.find((part) => part.type === type)?.value ?? "00";
   const fallbackToday = `${berlinDatePart("year")}-${berlinDatePart("month")}-${berlinDatePart("day")}`;
   const today = dashboard?.date && /^\d{4}-\d{2}-\d{2}$/.test(dashboard.date) ? dashboard.date : fallbackToday;
+  const activePlanningDate = planningDate || today;
+  const activeDailyPlan = planning?.weekly.days.find((day) => day.date === activePlanningDate) ?? planning?.daily ?? null;
+  const selectedPlanningTask = selectedPlanItem?.task_id ? dashboard?.tasks.find((task) => task.id === selectedPlanItem.task_id) ?? null : null;
   const berlinHour = Number(new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", hourCycle: "h23" }).format(new Date()));
   const greeting = berlinHour < 11 ? "Guten Morgen" : berlinHour < 18 ? "Guten Tag" : "Guten Abend";
   const openTasks = useMemo(() => (dashboard?.tasks ?? []).filter((task) => !task.done), [dashboard]);
@@ -329,11 +379,6 @@ export default function JarvisDashboard() {
   }
 
   function signOut() {
-    localStorage.removeItem("pw");
-    setPw(""); setDashboard(null); setJobs([]); setJobDetails(null); setChat([]); setIntelligence("");
-    dashboardLoaded.current = false;
-  }
-
     voiceModeRef.current = false;
     setVoiceMode(false);
     recognitionRef.current?.abort();
@@ -342,11 +387,11 @@ export default function JarvisDashboard() {
     speakingRef.current = false;
     setListening(false);
     setSpeaking(false);
-  async function sendMessage(text: string, briefing = false) {
-    if (!text.trim() || busyRef.current) return;
-    const requestId = chatRequestIds.current.get(text) ?? crypto.randomUUID();
-    chatRequestIds.current.set(text, requestId);
-    setChat((current) => [...current, { role: "user", text }]);
+    localStorage.removeItem("pw");
+    setPw(""); setDashboard(null); setJobs([]); setJobDetails(null); setChat([]); setIntelligence("");
+    dashboardLoaded.current = false;
+  }
+
   function startListening() {
     setVoiceTranscript("");
     const SpeechRecognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
@@ -515,12 +560,17 @@ export default function JarvisDashboard() {
     setSpeaking(false);
   }
 
+  async function sendMessage(text: string, briefing = false) {
+    if (!text.trim() || busyRef.current) return;
+    const requestId = chatRequestIds.current.get(text) ?? crypto.randomUUID();
+    chatRequestIds.current.set(text, requestId);
+    setChat((current) => [...current, { role: "user", text }]);
+    busyRef.current = true;
     setBusy(true);
     try {
       const response = await fetch("/api/chat", {
         method: "POST", headers: { ...appPasswordHeader(pw), "Content-Type": "application/json" },
         body: JSON.stringify({ message: text, request_id: requestId }),
-    busyRef.current = true;
       });
       if (response.status === 401) {
         localStorage.removeItem("pw"); setPw(""); setAuthError("Passwort stimmt nicht. Bitte erneut anmelden."); return;
@@ -528,31 +578,43 @@ export default function JarvisDashboard() {
       if (!response.ok) throw new Error(`JARVIS ist gerade nicht erreichbar (HTTP ${response.status}).`);
       const data = await response.json();
       setChat((current) => [...current, { role: "assistant", text: data.reply }]);
+      if (voiceModeRef.current) speakText(data.reply);
       if (briefing) setIntelligence(data.reply);
       chatRequestIds.current.delete(text);
       void loadJobs(pw).catch(() => {});
     } catch (error) {
       const message = error instanceof Error ? error.message : "Nachricht konnte nicht gesendet werden.";
-      if (voiceModeRef.current) speakText(data.reply);
       setChat((current) => [...current, { role: "assistant", text: message }]);
       if (briefing) setIntelligence(`Fehler: ${message}`);
     } finally {
+      busyRef.current = false;
       setBusy(false);
+      if (voiceModeRef.current && !speakingRef.current && !recognitionRef.current) startListening();
+    }
+  }
+
+  async function retryExecutionAction(actionId: string) {
+    setActionRetryBusy(actionId);
+    try {
+      const response = await fetch(`/api/actions/items/${encodeURIComponent(actionId)}/retry`, {
+        method: "POST",
+        headers: appPasswordHeader(pw),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Aktion konnte nicht wiederholt werden.");
+      await loadDashboard(pw);
+    } catch (error) {
+      setDashboardError(error instanceof Error ? error.message : "Aktion konnte nicht wiederholt werden.");
+    } finally {
+      setActionRetryBusy("");
     }
   }
 
   function send() {
-      busyRef.current = false;
     if (!input.trim() || busyRef.current) return;
-      if (voiceModeRef.current && !speakingRef.current && !recognitionRef.current) startListening();
     const text = input.trim(); setInput(""); void sendMessage(text);
   }
 
-  function askForBriefing() {
-    const prompt = "Erstelle ein knappes Tagesbriefing auf Deutsch. Nutze ausschließlich lesende Funktionen, um meine offenen Aufgaben, heutigen Termine und Routinen, Finanzübersicht, letzten Trainings und heutigen Gewohnheiten zu prüfen. Nimm keine Änderungen vor und erfinde keine Daten. Nenne nur konkrete Prioritäten und Hinweise, die sich aus den vorhandenen Daten ergeben. Wenn eine Datenquelle leer oder nicht verfügbar ist, sage das klar.";
-    setIntelligence("");
-    void sendMessage(prompt, true);
-    document.getElementById("assistant")?.scrollIntoView({ behavior: "smooth", block: "start" });
   function toggleListening() {
     if (listening) {
       if (voiceModeRef.current) {
@@ -564,6 +626,11 @@ export default function JarvisDashboard() {
     else if (!busyRef.current) startListening();
   }
 
+  function askForBriefing() {
+    const prompt = "Erstelle ein knappes Tagesbriefing auf Deutsch. Nutze ausschließlich lesende Funktionen, um meine offenen Aufgaben, heutigen Termine und Routinen, Finanzübersicht, letzten Trainings und heutigen Gewohnheiten zu prüfen. Nimm keine Änderungen vor und erfinde keine Daten. Nenne nur konkrete Prioritäten und Hinweise, die sich aus den vorhandenen Daten ergeben. Wenn eine Datenquelle leer oder nicht verfügbar ist, sage das klar.";
+    setIntelligence("");
+    void sendMessage(prompt, true);
+    document.getElementById("assistant")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   async function completeTask(task: Task) {
@@ -573,7 +640,11 @@ export default function JarvisDashboard() {
       const response = await fetch(`/api/tasks/${encodeURIComponent(task.id)}/complete`, { method: "POST", headers: appPasswordHeader(pw) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Aufgabe konnte nicht abgehakt werden.");
-      await loadDashboard(pw);
+      await Promise.all([loadDashboard(pw), loadPlanning(pw)]);
+      if (selectedPlanItem?.task_id === task.id) {
+        setSelectedPlanItem(null);
+        setTaskEdit(null);
+      }
     } catch (error) {
       setTaskError(error instanceof Error ? error.message : "Aufgabe konnte nicht abgehakt werden.");
     } finally {
@@ -591,10 +662,57 @@ export default function JarvisDashboard() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Gewohnheit konnte nicht abgehakt werden.");
-      await loadDashboard(pw);
+      await Promise.all([loadDashboard(pw), loadPlanning(pw)]);
     } catch (error) {
       setDashboardError(error instanceof Error ? error.message : "Gewohnheit konnte nicht abgehakt werden.");
     } finally { setHabitBusy(""); }
+  }
+
+  function selectPlanningItem(item: PlanBlock) {
+    setSelectedPlanItem(item);
+    setPlanningActionError("");
+    setMoveDate(item.day);
+    setMoveTime(item.start_time);
+    const task = item.task_id ? dashboard?.tasks.find((candidate) => candidate.id === item.task_id) : null;
+    setTaskEdit(task ? { text: task.text, due: task.due ?? "", priority: task.priority } : null);
+  }
+
+  async function savePlanningTask(event: FormEvent) {
+    event.preventDefault();
+    if (!selectedPlanningTask || !taskEdit || planningActionBusy) return;
+    setPlanningActionBusy(true); setPlanningActionError("");
+    try {
+      const response = await fetch(`/api/tasks/${encodeURIComponent(selectedPlanningTask.id)}`, {
+        method: "PATCH",
+        headers: { ...appPasswordHeader(pw), "Content-Type": "application/json" },
+        body: JSON.stringify({ ...taskEdit, due: taskEdit.due || null }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Aufgabe konnte nicht bearbeitet werden.");
+      await Promise.all([loadDashboard(pw), loadPlanning(pw)]);
+      setSelectedPlanItem(null); setTaskEdit(null);
+    } catch (error) {
+      setPlanningActionError(error instanceof Error ? error.message : "Aufgabe konnte nicht bearbeitet werden.");
+    } finally { setPlanningActionBusy(false); }
+  }
+
+  async function savePlanningMove(event: FormEvent) {
+    event.preventDefault();
+    if (!selectedPlanningTask || !selectedPlanItem || planningActionBusy) return;
+    setPlanningActionBusy(true); setPlanningActionError("");
+    try {
+      const response = await fetch("/api/planning", {
+        method: "POST",
+        headers: { ...appPasswordHeader(pw), "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({ action: "reschedule_task", task_id: selectedPlanningTask.id, target_day: moveDate, target_time: moveTime }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Aufgabe konnte nicht verschoben werden.");
+      await loadPlanning(pw);
+      setSelectedPlanItem(null);
+    } catch (error) {
+      setPlanningActionError(error instanceof Error ? error.message : "Aufgabe konnte nicht verschoben werden.");
+    } finally { setPlanningActionBusy(false); }
   }
 
   async function createJob(event: FormEvent) {
@@ -638,6 +756,18 @@ export default function JarvisDashboard() {
       setJobDetails(data); await loadJobs(pw);
     } catch (error) { setJobError(error instanceof Error ? automationErrorMessage(error.message) : "Planung konnte nicht wiederholt werden."); }
     finally { setJobActionBusy(false); }
+  }
+
+  async function cancelJob(jobId: string) {
+    setJobActionBusy(true); setJobError("");
+    try {
+      const response = await fetch(`/api/automation/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST", headers: appPasswordHeader(pw) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? `Abbruch fehlgeschlagen (HTTP ${response.status}).`);
+      await loadJob(jobId, pw); await loadJobs(pw);
+    } catch (error) {
+      setJobError(error instanceof Error ? automationErrorMessage(error.message) : "Auftrag konnte nicht abgebrochen werden.");
+    } finally { setJobActionBusy(false); }
   }
 
   function navLink(item: (typeof navigation)[number], compact = false) {
@@ -717,6 +847,63 @@ export default function JarvisDashboard() {
           </Card>
         </section>
 
+        <Card id="planning" className="content-card planning-card">
+          <SectionTitle
+            eyebrow="INTELLIGENT PLANNING"
+            title="Tages- und Wochenplan"
+            detail="Priorisiert Aufgaben, Termine und Routinen regelbasiert – ohne zusätzliche KI-Aufrufe."
+            action={<button type="button" className="subtle-link planning-refresh" disabled={planningLoading} onClick={() => { setPlanningLoading(true); void loadPlanning(pw).catch((error) => setPlanningError(error instanceof Error ? error.message : "Planung konnte nicht geladen werden.")).finally(() => setPlanningLoading(false)); }}>{planningLoading ? "Aktualisiere …" : "Neu planen"} <Icon name="repeat" size={14} /></button>}
+          />
+          {planningError && <div className="inline-error" role="alert">{planningError}</div>}
+          {planningNotice && <div className="planning-notice" role="status">{planningNotice}</div>}
+          {planningLoading && !planning ? <LoadingRows count={4} /> : planning && activeDailyPlan ? <>
+            <div className="planning-layout">
+              <section className="planning-panel" aria-label={`Zeitplan für ${activePlanningDate}`}>
+                <div className="planning-panel-heading"><div><span className="eyebrow">{activePlanningDate === today ? "HEUTE" : formatDate(activePlanningDate, { weekday: "long" }).toUpperCase()}</span><h3>{formatDate(activePlanningDate, { day: "numeric", month: "long" })}</h3><span className="planning-window">{activeDailyPlan.work_window.start_time}–{activeDailyPlan.work_window.end_time}{activeDailyPlan.work_window.source === "default" ? " · Standardfenster" : " · Memory"}</span></div><span className="planning-minutes">{activeDailyPlan.planned_minutes} Min. Fokus</span></div>
+                {activeDailyPlan.blocks.length ? <div className="planning-blocks">{activeDailyPlan.blocks.map((block) => <button type="button" key={block.id} className={`planning-block planning-block-${block.kind}${selectedPlanItem?.id === block.id ? " is-selected" : ""}`} onClick={() => selectPlanningItem(block)} aria-label={`${block.start_time} bis ${block.end_time}: ${block.title}`}>
+                  <span className="planning-block-time">{block.start_time}<small>{block.end_time}</small></span><span className="planning-block-copy"><strong>{block.title}</strong><small>{block.kind === "task" ? block.reason : block.category ?? (block.kind === "break" ? "Pause" : "Feste Verpflichtung")}</small></span><Icon name="arrow" size={15} />
+                </button>)}</div> : <EmptyState text="Für diesen Tag sind keine Aufgaben oder festen Zeitblöcke eingeplant." compact />}
+                {activeDailyPlan.unscheduled.length > 0 && <p className="muted-footnote">{activeDailyPlan.unscheduled.length} Aufgabe(n) bleiben ungeplant; prüfe Prioritäten und verfügbare Zeit.</p>}
+                {activeDailyPlan.conflicts.map((conflict) => <div className={`planning-conflict ${conflict.severity}`} key={conflict.id}><strong>{conflict.title}</strong><span>{conflict.detail}</span></div>)}
+              </section>
+
+              <section className="planning-panel" aria-label="Wochenübersicht">
+                <div className="planning-panel-heading"><div><span className="eyebrow">MONTAG BIS SONNTAG</span><h3>Diese Woche</h3></div><span className="planning-minutes">{planning.weekly.review.planned_tasks} Aufgaben</span></div>
+                <div className="planning-week-days">{planning.weekly.days.map((day) => {
+                  const count = day.blocks.filter((block) => block.kind === "task").length;
+                  return <button type="button" key={day.date} className={`planning-day-button${activePlanningDate === day.date ? " is-active" : ""}`} aria-pressed={activePlanningDate === day.date} onClick={() => { setPlanningDate(day.date); setSelectedPlanItem(null); }}>
+                    <span>{formatDate(day.date, { weekday: "short" })}</span><strong>{formatDate(day.date, { day: "2-digit" })}</strong><small>{count} Aufg.</small>
+                  </button>;
+                })}</div>
+                {planning.weekly.weekly_goals.length > 0 && <div className="planning-goals"><span className="eyebrow">ZIELBEZUG</span>{planning.weekly.weekly_goals.map((goal) => <span className="planning-goal-chip" key={goal}>{goal}</span>)}</div>}
+                <div className="planning-review"><strong>Wochenrückblick</strong><span>{planning.weekly.review.completed_tasks_due} erledigt · {planning.weekly.review.open_tasks_due} offen mit Fälligkeit diese Woche · {planning.weekly.review.workouts_logged} Training · {planning.weekly.review.habit_checks} Habit-Checks</span><small>{planning.weekly.review.completion_measure_note}</small></div>
+                {planning.weekly.conflicts.length > 0 && <div className="planning-conflict warning"><strong>{planning.weekly.conflicts.length} Wochenhinweise</strong><span>{planning.weekly.conflicts.slice(0, 3).map((conflict) => conflict.title).join(" · ")}</span></div>}
+              </section>
+            </div>
+            {selectedPlanItem && <section className="planning-detail" aria-label="Details des ausgewählten Zeitblocks">
+              <div className="planning-detail-heading"><div><span className="eyebrow">{selectedPlanItem.kind === "task" ? "AUFGABE" : "ZEITBLOCK"}</span><h3>{selectedPlanItem.title}</h3></div><button type="button" className="icon-button" aria-label="Details schließen" onClick={() => { setSelectedPlanItem(null); setTaskEdit(null); }}><Icon name="stop" size={15} /></button></div>
+              <p>{selectedPlanItem.start_time}–{selectedPlanItem.end_time} · {formatDate(selectedPlanItem.day, { weekday: "long", day: "numeric", month: "long" })}{selectedPlanItem.reason ? ` · ${selectedPlanItem.reason}` : ""}</p>
+              {planningActionError && <div className="inline-error" role="alert">{planningActionError}</div>}
+              {selectedPlanningTask && taskEdit && <>
+                <div className="planning-actions">
+                  <button type="button" className="primary-button" disabled={planningActionBusy || Boolean(taskBusy)} onClick={() => void completeTask(selectedPlanningTask)}>{taskBusy === selectedPlanningTask.id ? "…" : "Erledigt"}</button>
+                </div>
+                <form className="planning-edit-form" onSubmit={(event) => void savePlanningTask(event)}>
+                  <label>Titel<input value={taskEdit.text} maxLength={200} required onChange={(event) => setTaskEdit({ ...taskEdit, text: event.target.value })} /></label>
+                  <label>Fällig am<input type="date" value={taskEdit.due} onChange={(event) => setTaskEdit({ ...taskEdit, due: event.target.value })} /></label>
+                  <label>Priorität<select value={taskEdit.priority} onChange={(event) => { if (isTaskPriority(event.target.value)) setTaskEdit({ ...taskEdit, priority: event.target.value }); }}><option value="high">Hoch</option><option value="normal">Normal</option><option value="low">Niedrig</option></select></label>
+                  <button type="submit" className="secondary-button" disabled={planningActionBusy}>{planningActionBusy ? "Speichert …" : "Änderungen speichern"}</button>
+                </form>
+                <form className="planning-move-form" onSubmit={(event) => void savePlanningMove(event)}>
+                  <label>Planzeit verschieben auf<input type="date" value={moveDate} min={today} required onChange={(event) => setMoveDate(event.target.value)} /></label>
+                  <label>Uhrzeit<input type="time" value={moveTime} required onChange={(event) => setMoveTime(event.target.value)} /></label>
+                  <button type="submit" className="secondary-button" disabled={planningActionBusy}>{planningActionBusy ? "Verschiebt …" : "Zeitblock verschieben"}</button>
+                </form>
+              </>}
+            </section>}
+          </> : !planningError && <EmptyState text="Planungsdaten sind noch nicht verfügbar." />}
+        </Card>
+
         <div className="dashboard-columns">
           <div className="main-column">
             <Card id="my-day" className="content-card day-card">
@@ -773,6 +960,18 @@ export default function JarvisDashboard() {
             <button className="secondary-button" type="button" disabled={busy} onClick={askForBriefing}>{busy ? "JARVIS denkt nach…" : intelligence ? "Briefing aktualisieren" : "Tagesbriefing erstellen"}<Icon name="arrow" size={15} /></button>
           </Card>
 
+          <Card className="chat-card execution-history-card">
+            <SectionTitle eyebrow="EXECUTION ENGINE" title="Ausgeführte Aktionen" detail="Status, Fehler und Wiederholungen" />
+            {dashboard?.actionItems?.length ? <div className="execution-action-list">{dashboard.actionItems.slice(0, 8).map((item) => {
+              const statusLabel = item.status === "completed" ? "Abgeschlossen" : item.status === "running" ? "Läuft" : item.status === "awaiting_approval" ? "Bestätigung erforderlich" : item.status === "failed" ? "Fehlgeschlagen" : "Wartet";
+              return <div className={`execution-action execution-${item.status}`} key={item.action_id}>
+                <div><strong>{item.label}</strong><span>{statusLabel}{item.attempts ? ` · ${item.attempts} Versuch(e)` : ""}</span>{item.result && <small>{item.result}</small>}{item.error_code && <small className="section-error">{item.error_code}</small>}</div>
+                {item.status === "failed" && <button type="button" className="secondary-button" disabled={actionRetryBusy === item.action_id} onClick={() => void retryExecutionAction(item.action_id)}>{actionRetryBusy === item.action_id ? "Wiederholt …" : "Erneut versuchen"}</button>}
+              </div>;
+            })}</div> : <EmptyState text="Noch keine Aktionen ausgeführt." compact />}
+            {dashboard?.errors.actions && <small className="section-error">{dashboard.errors.actions}</small>}
+          </Card>
+
           <Card className="chat-card">
             <SectionTitle eyebrow="DIRECT CHANNEL" title="AI Assistant" detail="Sprich mit JARVIS" action={<button className={`secondary-button voice-mode-button${voiceMode ? " is-active" : ""}`} type="button" onClick={toggleVoiceMode} aria-pressed={voiceMode} title={voiceMode ? "Voice-Modus beenden" : "Voice-Modus starten"}><Icon name="volume" size={15} />{voiceMode ? "Voice-Modus aktiv" : "Voice-Modus starten"}</button>} />
             <div className="chat-stream" aria-live="polite">{chat.length ? chat.map((message, index) => <div className={`chat-message ${message.role}`} key={`${index}-${message.role}`}><span className="chat-avatar">{message.role === "assistant" ? <Icon name="spark" size={14} /> : "Y"}</span><p>{message.text}</p></div>) : <EmptyState text="Stelle eine Frage zu deiner Planung, deinen Aufgaben oder Routinen." compact />}</div>
@@ -790,12 +989,13 @@ export default function JarvisDashboard() {
         </section>
 
         <Card className="content-card agents-card">
-          <SectionTitle eyebrow="REPOSITORY WORKFLOW" title="Agenten-Aufträge" detail="OpenAI plant · Claude prüft · GitHub arbeitet erst nach deiner Freigabe" />
-          <form className="agent-form" onSubmit={createJob}><textarea value={jobRequest} onChange={(event) => setJobRequest(event.target.value)} maxLength={6000} rows={3} placeholder="Beschreibe eine Repository-Änderung – keine Passwörter oder API-Schlüssel." /><button className="primary-button" type="submit" disabled={jobBusy || !jobRequest.trim()}>{jobBusy ? "Plan wird erstellt…" : "Plan erstellen"}<Icon name="arrow" size={15} /></button></form>
+          <SectionTitle eyebrow="REPOSITORY WORKFLOW" title="Agenten-Aufträge" detail="OpenAI plant · Claude prüft · Codex arbeitet in einem isolierten Entwicklungsbranch" />
+          <form className="agent-form" onSubmit={createJob}><textarea value={jobRequest} onChange={(event) => setJobRequest(event.target.value)} maxLength={6000} rows={3} placeholder="Beschreibe eine Repository-Änderung – keine Passwörter oder API-Schlüssel." /><button className="primary-button" type="submit" disabled={jobBusy || !jobRequest.trim()}>{jobBusy ? "OpenAI plant · Claude prüft…" : "Auftrag erstellen und starten"}<Icon name="arrow" size={15} /></button></form>
           {jobError && <p role="alert" className="inline-error">{jobError}</p>}
           <div className="agent-job-layout"><div className="job-list"><h3>Letzte Aufträge</h3>{jobs.length ? jobs.map((job) => <button key={job.id} className={`job-list-item${selectedJob === job.id ? " selected" : ""}`} type="button" onClick={() => { setSelectedJob(job.id); setJobError(""); }}><span className={`job-status-dot ${job.status}`} /><span><strong>{jobStatusLabel[job.status] ?? job.status}</strong><small>{job.plan?.summary ?? job.request_text}</small></span><Icon name="chevron" size={15} /></button>) : <p className="empty-copy">Noch keine Agenten-Aufträge.</p>}</div>
-            {jobDetails && selectedJob === jobDetails.job.id && <article className="job-detail"><h3>{jobStatusLabel[jobDetails.job.status] ?? jobDetails.job.status}</h3><p>{jobDetails.job.plan?.summary ?? jobDetails.job.request_text}</p>{jobDetails.job.plan?.steps.map((step, index) => <p className="job-step" key={index}><strong>{index + 1}. {step.title}</strong><br />{step.description}</p>)}{jobDetails.job.review && <p className="review-copy"><strong>Claude-Prüfung:</strong> {jobDetails.job.review.summary}</p>}{jobDetails.job.review?.concerns.map((concern, index) => <p className="job-concern" key={index}>Hinweis: {concern}</p>)}{jobDetails.steps.map((step) => <p className="job-step" key={step.id}>{step.agent} · {step.name}: {step.summary ?? (step.error_code ? automationErrorMessage(step.error_code) : step.status)}</p>)}{jobDetails.job.evaluation && <p><strong>Ergebnis:</strong> {jobDetails.job.evaluation.summary}</p>}{jobDetails.job.evaluation?.limitations.map((item, index) => <p className="job-concern" key={index}>Einschränkung: {item}</p>)}{jobDetails.job.github_pr_url && <p><a className="subtle-link" href={jobDetails.job.github_pr_url} target="_blank" rel="noreferrer">Pull Request prüfen <Icon name="arrow" size={14} /></a></p>}{jobDetails.job.github_task_url && <p><a className="subtle-link" href={jobDetails.job.github_task_url} target="_blank" rel="noreferrer">GitHub-Aufgabe öffnen <Icon name="arrow" size={14} /></a></p>}{jobDetails.job.github_state && <p className="job-step">GitHub-Status: {jobDetails.job.github_state}</p>}{jobDetails.job.failure_code && <p role="alert" className="inline-error">{automationErrorMessage(jobDetails.job.failure_code)}</p>}{jobDetails.job.status === "failed" && !jobDetails.job.github_task_id && jobDetails.job.planning_attempt_count < 2 && /^(openai|claude)_|^provider_request_failed$/.test(jobDetails.job.failure_code ?? "") && <button className="secondary-button" disabled={jobActionBusy} onClick={() => void retryJob(jobDetails.job.id)}>{jobActionBusy ? "Wird wiederholt…" : "Planung erneut versuchen"}</button>}{jobDetails.job.status === "awaiting_approval" && <div className="approval-panel"><h4>Vorgeschlagener GitHub-Auftrag</h4><pre>{jobDetails.job.review?.prompt ?? jobDetails.job.plan?.prompt}</pre><p>Die Freigabe startet einen Agenten auf einem neuen Branch und fordert einen Pull Request an. Kein automatischer Merge oder Deploy.</p><button className="primary-button" type="button" disabled={jobActionBusy} onClick={() => { if (window.confirm("Diesen angezeigten Plan an den GitHub-Agenten übergeben? Es wird ein Branch/PR angefordert; kein automatischer Merge oder Deploy.")) void approveJob(jobDetails.job.id); }}>{jobActionBusy ? "Wird freigegeben…" : "Plan freigeben und Agent starten"}</button></div>}</article>}
+            {jobDetails && selectedJob === jobDetails.job.id && <article className="job-detail"><h3>{jobStatusLabel[jobDetails.job.status] ?? jobDetails.job.status}</h3><p>{jobDetails.job.plan?.summary ?? jobDetails.job.request_text}</p>{jobDetails.job.plan?.vision && <p><strong>Zielvision:</strong> {jobDetails.job.plan.vision}</p>}{jobDetails.job.current_task && <p className="job-step"><strong>Aktueller Schritt:</strong> {jobDetails.job.current_task} {typeof jobDetails.job.progress === "number" ? `· ${jobDetails.job.progress}%` : ""}</p>}{jobDetails.job.worker_id && <p className="job-step">Worker: {jobDetails.job.worker_id}{jobDetails.job.heartbeat_at ? ` · Heartbeat ${new Date(jobDetails.job.heartbeat_at).toLocaleString("de-DE")}` : ""}</p>}{jobDetails.job.branch_name && <p className="job-step">Branch: {jobDetails.job.branch_name}</p>}{jobDetails.job.commit_sha && <p className="job-step">Commit: {jobDetails.job.commit_sha}</p>}{jobDetails.job.test_results && <pre className="job-step">Tests: {JSON.stringify(jobDetails.job.test_results, null, 2)}</pre>}{jobDetails.job.plan?.steps.map((step, index) => <div className="job-step" key={step.id ?? index}><p><strong>{index + 1}. {step.title}</strong> {typeof step.priority === "number" ? `· P${step.priority}` : ""}</p><p>{step.description}</p>{step.dependsOn?.length ? <p>Abhängig von: {step.dependsOn.join(", ")}</p> : null}{step.acceptanceCriteria?.map((criterion, i) => <p key={`accept-${i}`}>Akzeptanz: {criterion}</p>)}{step.testRequirements?.map((requirement, i) => <p key={`test-${i}`}>Test: {requirement}</p>)}</div>)}{jobDetails.job.review && <p className="review-copy"><strong>Claude-Prüfung:</strong> {jobDetails.job.review.summary}</p>}{jobDetails.job.review?.concerns.map((concern, index) => <p className="job-concern" key={index}>Hinweis: {concern}</p>)}{jobDetails.steps.map((step) => <p className="job-step" key={step.id}>{step.agent} · {step.name}: {step.summary ?? (step.error_code ? automationErrorMessage(step.error_code) : step.status)}</p>)}{jobDetails.job.evaluation && <p><strong>Ergebnis:</strong> {jobDetails.job.evaluation.summary}</p>}{jobDetails.job.evaluation?.limitations.map((item, index) => <p className="job-concern" key={index}>Einschränkung: {item}</p>)}{jobDetails.job.github_pr_url && <p><a className="subtle-link" href={jobDetails.job.github_pr_url} target="_blank" rel="noreferrer">Pull Request prüfen <Icon name="arrow" size={14} /></a></p>}{jobDetails.job.github_task_url && <p><a className="subtle-link" href={jobDetails.job.github_task_url} target="_blank" rel="noreferrer">GitHub-Aufgabe öffnen <Icon name="arrow" size={14} /></a></p>}{jobDetails.job.github_state && <p className="job-step">GitHub-Status: {jobDetails.job.github_state}</p>}{jobDetails.job.failure_code && <p role="alert" className="inline-error">{automationErrorMessage(jobDetails.job.failure_code)}</p>}{["queued", "in_progress", "awaiting_resource"].includes(jobDetails.job.status) && <button className="secondary-button" type="button" disabled={jobActionBusy || jobDetails.job.cancel_requested} onClick={() => void cancelJob(jobDetails.job.id)}>{jobDetails.job.cancel_requested ? "Abbruch angefordert…" : "Auftrag abbrechen"}</button>}{jobDetails.job.status === "failed" && !jobDetails.job.github_task_id && jobDetails.job.planning_attempt_count < 2 && /^(openai|claude)_|^provider_request_failed$/.test(jobDetails.job.failure_code ?? "") && <button className="secondary-button" disabled={jobActionBusy} onClick={() => void retryJob(jobDetails.job.id)}>{jobActionBusy ? "Wird wiederholt…" : "Planung erneut versuchen"}</button>}{jobDetails.job.status === "awaiting_approval" && <div className="approval-panel"><h4>Legacy GitHub-Agent-Auftrag</h4><pre>{jobDetails.job.review?.prompt ?? jobDetails.job.plan?.prompt}</pre><p>Dieser ältere Auftrag wird nicht vom Codex Worker übernommen. Die Freigabe nutzt den bisherigen GitHub-Agentenpfad.</p><button className="primary-button" type="button" disabled={jobActionBusy} onClick={() => { if (window.confirm("Diesen Legacy-Plan an den GitHub-Agenten übergeben? Es wird ein Branch/PR angefordert; kein automatischer Merge oder Deploy.")) void approveJob(jobDetails.job.id); }}>{jobActionBusy ? "Wird freigegeben…" : "Legacy-Auftrag freigeben"}</button></div>}</article>}
           </div>
+          {jobDetails && selectedJob === jobDetails.job.id && jobDetails.events.length > 0 && <div className="job-events"><strong>Letzte Aktionen</strong>{jobDetails.events.slice(-8).reverse().map((event) => <p key={event.id}>{event.type} · {new Date(event.created_at).toLocaleString("de-DE")}</p>)}</div>}
         </Card>
 
         <DevelopmentCenter password={pw} />
