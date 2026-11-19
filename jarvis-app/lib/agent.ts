@@ -3,8 +3,86 @@ import { randomUUID } from "node:crypto";
 import { getSupabaseClient } from "./supabase";
 import { TOOLS, runTool } from "./tools";
 import { getLocalDate, runTaskCreationOnce } from "./task-utils";
+import { hasConfirmedZeroCostQuota } from "./zero-cost";
+import { createAutomationJob } from "./automation/service";
+import { runPlanningIntent } from "./planning-chat";
+import { analyzeOrchestratorInput, selectRelevantMemory } from "./orchestrator";
+
+const DEVELOPMENT_REQUEST_PATTERN = /\b(entwickle|entwickeln|implementiere|implementieren|baue|bauen|erstelle|erstellen|programmiere|programmieren|fixe|repariere|reparieren|build|implement|create|fix)\b/i;
 
 export async function runAgent(text: string, save = true, requestId: string = randomUUID()) {
+  const orchestration = analyzeOrchestratorInput(text);
+  const planningReply = await runPlanningIntent(text);
+  if (planningReply !== null && orchestration.intents.length === 1 && orchestration.actions.length === 0) {
+    if (save) {
+      const { error } = await getSupabaseClient().from("messages").insert([{ role: "user", content: text }, { role: "assistant", content: planningReply }]);
+      if (error) throw new Error(`Planungsantwort konnte nicht gespeichert werden: ${error.message}`);
+    }
+    return planningReply;
+  }
+  if (orchestration.shouldAskClarification) {
+    const reply = orchestration.actions
+      .filter((action) => action.type === "clarify")
+      .map((action) => action.question)
+      .join(" ");
+    if (save) {
+      const { error } = await getSupabaseClient().from("messages").insert([{ role: "user", content: text }, { role: "assistant", content: reply }]);
+      if (error) throw new Error("offline_chat_persistence_failed");
+    }
+    return reply;
+  }
+  if (orchestration.shouldRequireApproval) {
+    const reply = "Diese Änderung hat größere Auswirkungen. Ich habe nichts ausgeführt. Bitte bestätige ausdrücklich, welche Aktion ausgeführt werden soll.";
+    if (save) {
+      const { error } = await getSupabaseClient().from("messages").insert([{ role: "user", content: text }, { role: "assistant", content: reply }]);
+      if (error) throw new Error("offline_chat_persistence_failed");
+    }
+    return reply;
+  }
+  if (!hasConfirmedZeroCostQuota("anthropic") && orchestration.actions.length > 0) {
+    const messages: string[] = [];
+    for (const action of orchestration.actions) {
+      try {
+        if (action.type === "add_task") {
+          messages.push(await runTool("add_task", { title: action.title, due: action.due, priority: action.priority }));
+        } else if (action.type === "add_event") {
+          messages.push(await runTool("add_event", { title: action.title, day: action.day, time: action.time, category: action.category }));
+        } else if (action.type === "log_gym") {
+          messages.push(await runTool("log_gym", { exercise: action.exercise }));
+        } else if (action.type === "save_fact") {
+          messages.push(await runTool("save_fact", { text: action.text }));
+        } else if (action.type === "complete_task") {
+          messages.push("Mehrere Aufgaben müssen vor dem Abhaken identifiziert werden.");
+        }
+      } catch (error) {
+        messages.push(error instanceof Error ? error.message : "Aktion konnte nicht ausgeführt werden.");
+      }
+    }
+    const reply = messages.length
+      ? messages.join(" ")
+      : "Die Nachricht wurde verstanden, aber für eine Ausführung fehlen noch sichere Details.";
+    if (save) {
+      const { error } = await getSupabaseClient().from("messages").insert([{ role: "user", content: text }, { role: "assistant", content: reply }]);
+      if (error) throw new Error("offline_chat_persistence_failed");
+    }
+    return reply;
+  }
+  if (!hasConfirmedZeroCostQuota("anthropic")) {
+    let reply = "JARVIS ist im 0-EUR-Modus. Die KI-Anfrage ist pausiert, bis ein kostenloses Kontingent ohne kostenpflichtigen Fallback verifiziert und freigegeben ist.";
+    if (DEVELOPMENT_REQUEST_PATTERN.test(text)) {
+      try {
+        const job = await createAutomationJob(text, `chat:${requestId}`);
+        reply = `Entwicklungsauftrag ${job.id} wurde dauerhaft gespeichert und pausiert. JARVIS setzt ihn fort, sobald die benötigten kostenlosen KI-Kontingente verifiziert verfügbar sind. Es wird kein kostenpflichtiger Fallback verwendet.`;
+      } catch {
+        reply = "JARVIS ist im 0-EUR-Modus. Der Entwicklungsauftrag konnte wegen eines Speicher- oder Validierungsfehlers nicht in die dauerhafte Auftragsqueue übernommen werden; bitte den angezeigten Fehler prüfen.";
+      }
+    }
+    if (save) {
+      const { error } = await getSupabaseClient().from("messages").insert([{ role: "user", content: text }, { role: "assistant", content: reply }]);
+      if (error) throw new Error("offline_chat_persistence_failed");
+    }
+    return reply;
+  }
   if (!process.env.ANTHROPIC_API_KEY) throw new Error("claude_not_configured");
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: 25_000, maxRetries: 1 });
   const supabase = getSupabaseClient();
@@ -19,10 +97,10 @@ export async function runAgent(text: string, save = true, requestId: string = ra
   const messages: Anthropic.MessageParam[] = [...past, { role: "user", content: text }];
   const system =
     "Du bist Jarvis, der persönliche Assistent von Youssef: direkt, konkret, motivierend, auf Deutsch, kurz. " +
-    "Du hast Tools für Plan, Aufgaben, Geld, Fitness, Gewohnheiten und Gedächtnis. Nutze sie, statt zu raten, und trage Dinge direkt ein, wenn er sie erwähnt. " +
+    "Du hast deterministische Tools für Tages- und Wochenplanung, Konflikte, Prioritäten, Aufgaben, Geld, Fitness, Gewohnheiten und Gedächtnis. Nutze Planungs-Tools statt zu raten; der Plan-Kontext wird gezielt aus strukturierten Daten geladen, nicht aus dem Chatverlauf. " +
     "Erstelle Aufgaben mit add_task nur einmal pro eindeutiger Aufgabe; übernimm den Titel, ein ausdrücklich genanntes Datum und eine ausdrücklich genannte Priorität. Ohne Datum due leer lassen, ohne Priorität normal verwenden. Dringend bedeutet high nur, wenn der Nutzer diese Dringlichkeit klar nennt. Bei mehrdeutigen Daten, insbesondere fehlendem Jahr, frage nach statt zu raten. Nach erfolgreichem Speichern bestätige Titel, Fälligkeit und Priorität. " +
     "Für heute/morgen/Wochentage nutze list_tasks_by_date mit period=today, tomorrow oder this_week; die Anwendung berechnet Europe/Berlin und Montag bis Sonntag. Einen Wochentag ohne weitere Präzisierung als nächstes zukünftiges Vorkommen interpretieren; bei unklarer Absicht nachfragen. Für konkrete Daten nutze period=date und ein YYYY-MM-DD-Datum; bei mehrdeutigem Jahr nachfragen. „Diese Woche erledigt“ bedeutet erledigte Aufgaben mit Fälligkeit diese Woche; wenn nach dem tatsächlichen Erledigungszeitpunkt gefragt wird, erkläre, dass kein Abschlussdatum gespeichert wird. " +
-    "Wenn Youssef eine konkrete Änderung am JARVIS-Repository oder einen Coding-Auftrag erteilt, nutze request_automation. Behaupte nicht, Code geändert zu haben: der Plan wartet ausdrücklich auf Freigabe im Dashboard oder Telegram. Niemals Geheimnisse in Aufträge übernehmen. " +
+    "Wenn Youssef eine konkrete Änderung am JARVIS-Repository oder einen Coding-Auftrag erteilt, nutze request_automation. Nach Plan und Prüfung kommt der Auftrag automatisch in die isolierte Coding-Worker-Queue. Behaupte nicht, Code geändert oder getestet zu haben, bevor das Development Center Worker-, Commit- und Testergebnisse meldet. Production-Änderungen, Deployments und externe Aktionen niemals durch diesen Pfad starten. Niemals Geheimnisse in Aufträge übernehmen. " +
     "Melde Schreibvorgänge nur dann als erfolgreich, wenn das Tool eine erfolgreiche Datenbankoperation bestätigt. Weise auf Tool-Fehler ausdrücklich hin. " +
     "Heute in Europe/Berlin ist " + getLocalDate() + ". Gesundheit: Wade (möglicher Muskelfaserriss) und Rücken schonen. " +
     "Bei Geld und Trading rechnest du ehrlich vor und führst keine Orders aus. Gemerkte Fakten:\n" +
