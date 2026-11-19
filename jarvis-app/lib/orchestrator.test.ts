@@ -92,3 +92,13 @@ test("day planning request creates learning, calendar and fitness actions", () =
   assert.ok(result.actions.some((action) => action.type === "add_event"));
   assert.ok(result.actions.some((action) => action.type === "generate_daily_plan"));
 });
+
+test("multi-action request extracts the learning task title instead of the full sentence", () => {
+  const result = analyzeOrchestratorInput(
+    "Plane morgen meinen Tag. Ich habe um 16 Uhr Fußball, muss Englisch lernen und will ins Fitnessstudio.",
+    new Date("2026-11-19T10:00:00Z"),
+  );
+  const task = result.actions.find((action) => action.type === "add_task");
+  assert.equal(task?.type, "add_task");
+  if (task?.type === "add_task") assert.equal(task.title, "Englisch lernen");
+});

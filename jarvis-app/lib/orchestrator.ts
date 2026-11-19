@@ -156,12 +156,15 @@ export function analyzeOrchestratorInput(input: string, now = new Date()): Orche
       intents.add("task");
       tools.add("add_task");
       const due = resolveGermanDate(text, now);
-      let title = text
-        .replace(/^(?:ich\s+muss|ich\s+brauche|erstelle|füge|mach(?:e)?(?: eine)? aufgabe|die aufgabe)\s*/i, "")
-        .replace(/\s+(?:bis|am|für|für)\s+(?:morgen|heute|übermorgen|montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\b.*$/i, "")
-        .replace(/\b(bitte|dringend)\b/gi, "")
-        .replace(/\s+/g, " ")
-        .trim();
+      const learningTask = /\b(muss|muss noch|möchte|will)\s+(.*?)\blernen\b/i.exec(text);
+      let title = learningTask?.[2]
+        ? `${learningTask[2].trim()} lernen`
+        : text
+          .replace(/^(?:ich\s+muss|ich\s+brauche|erstelle|füge|mach(?:e)?(?: eine)? aufgabe|die aufgabe)\s*/i, "")
+          .replace(/\s+(?:bis|am|für|für)\s+(?:morgen|heute|übermorgen|montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\b.*$/i, "")
+          .replace(/\b(bitte|dringend)\b/gi, "")
+          .replace(/\s+/g, " ")
+          .trim();
       if (title.length > 120) title = title.slice(0, 120);
       if (title) actions.push({ type: "add_task", title, due, priority: /\b(dringen(d|t)|höchste priorität)\b/i.test(text) ? "high" : "normal" });
     }
